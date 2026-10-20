@@ -1,0 +1,37 @@
+{
+  "id": "/",
+  "name": "墨阅 · 私人书库",
+  "short_name": "墨阅",
+  "description": "多用户 EPUB / TXT / PDF / 漫画 / Kindle 与有声书库",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "any",
+  "background_color": "#f4f1ea",
+  "theme_color": "#f4f1ea",
+  "categories": ["books", "education", "productivity"],
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/assets/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

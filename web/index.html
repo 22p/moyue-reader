@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="paper">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f1ea">
+<meta name="application-name" content="墨阅">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="墨阅">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>墨阅 · 私人书库</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/assets/app.css">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/favicon-32.png">
+<link rel="icon" type="image/svg+xml" href="/assets/icons/icon.svg">
+<link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22z"/><path d="M4 17.5A2.5 2.5 0 0 1 6.5 15H20"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-menu-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M6 3h12v18l-6-4.5L6 21z"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></symbol>
+  <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M3 8h5V3M21 8h-5V3M16 21v-5h5M8 21v-5H3"/></symbol>
+  <symbol id="i-chevron-left" viewBox="0 0 24 24"><path d="M14 6l-6 6 6 6"/></symbol>
+  <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="M10 6l6 6-6 6"/></symbol>
+  <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M4 12.5l5 5L20 6"/></symbol>
+  <symbol id="i-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-fire" viewBox="0 0 24 24"><path d="M12 3s5 4.5 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-5 .3 1.5 1 2.5 2 3 0-3 1-5.5 1-7z"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M16 4.6a3.2 3.2 0 0 1 0 6.3M18 14.6c2.4.6 4 2.5 4 5"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+  <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h5"/><path d="M15 8l4 4-4 4M19 12H9"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M4 12h16"/></symbol>
+  <symbol id="i-headphones" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><path d="M4 15h2a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM20 15h-2a1 1 0 0 0-1 1v3a1 1 0 0 0 1 1h1a1 1 0 0 0 1-1z"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l10-6.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+  <symbol id="i-prev-sentence" viewBox="0 0 24 24"><path d="M5 5v14"/><path d="M19 5.5v13L9 12z"/></symbol>
+  <symbol id="i-next-sentence" viewBox="0 0 24 24"><path d="M19 5v14"/><path d="M5 5.5v13L15 12z"/></symbol>
+  <symbol id="i-cloud-upload" viewBox="0 0 24 24"><path d="M6.5 18a4.5 4.5 0 0 1-.4-9 6 6 0 0 1 11.6 1.2A3.9 3.9 0 0 1 18 18"/><path d="M12 21v-9m0 0-3.2 3.2M12 12l3.2 3.2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></symbol>
+</svg>
+
+<div id="app">
+
+  <!-- ============ 登录 / 初始化 ============ -->
+  <div class="auth" id="authView" hidden>
+    <div class="auth-art" aria-hidden="true">
+      <div class="auth-art-inner">
+        <div class="brand-mark brand-mark-lg"><svg viewBox="0 0 24 24" class="mark-svg"><use href="#i-book"/></svg></div>
+        <h1>墨阅</h1>
+        <p>把喜欢的书收在一起，<br>然后安静地读。</p>
+        <div class="auth-meta">EPUB / TXT / PDF · 漫画 · 有声书</div>
+      </div>
+    </div>
+    <div class="auth-panel">
+      <select class="auth-lang" id="authLang" aria-label="界面语言">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+        <option value="ko">한국어</option>
+      </select>
+      <form class="auth-card" id="authForm" autocomplete="on">
+        <div class="auth-mobile-brand">
+          <span class="brand-mark"><svg viewBox="0 0 24 24" class="mark-svg"><use href="#i-book"/></svg></span>
+          <b>墨阅</b>
+        </div>
+        <span class="eyebrow" id="authEyebrow">欢迎回来</span>
+        <h2 id="authTitle">登录书库</h2>
+        <p class="auth-desc" id="authDesc">使用管理员为你创建的账号登录。</p>
+
+        <label class="field">
+          <span>用户名</span>
+          <input id="authUser" name="username" type="text" autocomplete="username" required>
+        </label>
+        <label class="field">
+          <span>密码</span>
+          <input id="authPass" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <label class="field" id="authConfirmWrap" hidden>
+          <span>确认密码</span>
+          <input id="authConfirm" type="password" autocomplete="new-password">
+        </label>
+
+        <div class="auth-error" id="authError" hidden></div>
+        <button class="btn btn-primary btn-block" id="authSubmit" type="submit">登录</button>
+        <p class="auth-hint" id="authHint">首次部署？创建管理员账号后即可开始整理书库。</p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ============ 书库 ============ -->
+  <div class="library" id="libraryView" hidden>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="墨阅首页">
+        <span class="brand-mark"><svg viewBox="0 0 24 24" class="mark-svg"><use href="#i-book"/></svg></span>
+        <span class="brand-text"><b>墨阅</b><small>PRIVATE LIBRARY</small></span>
+      </a>
+      <div class="topbar-tools">
+        <label class="search">
+          <svg class="icon"><use href="#i-search"/></svg>
+          <input id="searchInput" type="search" placeholder="搜索书名或作者" autocomplete="off" spellcheck="false">
+        </label>
+        <select id="sortSelect" class="select" aria-label="排序方式">
+          <option value="recent">最近阅读</option>
+          <option value="added">最近添加</option>
+          <option value="title">按书名</option>
+        </select>
+        <button class="btn btn-primary" id="uploadBtn" hidden>
+          <svg class="icon"><use href="#i-plus"/></svg><span class="btn-label">导入书籍</span>
+        </button>
+        <div class="user-menu" id="userMenu">
+          <button class="avatar-btn" id="avatarBtn" aria-haspopup="true" aria-expanded="false">
+            <span id="avatarText">墨</span>
+          </button>
+          <div class="user-pop" id="userPop" hidden>
+            <div class="user-info">
+              <strong id="userName">—</strong>
+              <span id="userAccount">@—</span>
+            </div>
+            <button data-user-act="admin" id="adminEntry"><svg class="icon"><use href="#i-shield"/></svg>管理控制台</button>
+            <button data-user-act="install" id="installEntry" hidden><svg class="icon"><use href="#i-download"/></svg>安装到桌面</button>
+            <button data-user-act="lang" id="langEntry"><svg class="icon"><use href="#i-settings"/></svg>界面语言</button>
+            <button data-user-act="sessions"><svg class="icon"><use href="#i-shield"/></svg>登录设备</button>
+            <button data-user-act="password"><svg class="icon"><use href="#i-lock"/></svg>修改密码</button>
+            <button data-user-act="logout"><svg class="icon"><use href="#i-logout"/></svg>退出登录</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main class="library-main">
+      <div class="library-switch" id="librarySwitch"></div>
+
+      <section class="continue" id="continueCard" hidden></section>
+      <section class="overview" id="overview" aria-label="阅读统计"></section>
+
+      <section class="shelf">
+        <div class="shelf-head">
+          <h2>我的书架</h2>
+          <span class="shelf-count" id="shelfCount"></span>
+        </div>
+        <div class="book-grid" id="bookGrid"></div>
+        <div class="empty" id="emptyState" hidden>
+          <div class="empty-art">
+            <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M12 14h14c4 0 6 2 6 5 0-3 2-5 6-5h14v34H38c-4 0-6 2-6 4-0-2-2-4-6-4H12z"/><path d="M32 19v29"/></svg>
+          </div>
+          <h3>书架还空着</h3>
+          <p>把 EPUB 或 TXT 文件拖进窗口，或者点击下面按钮开始。</p>
+          <button class="btn btn-primary" id="emptyUpload">选择书籍文件</button>
+          <span class="empty-hint" id="emptyHint">支持多选，文件保存在书库目录中</span>
+        </div>
+      </section>
+
+      <footer class="library-foot">
+        <span>墨阅 · 书库</span>
+        <span>阅读进度、书签与时长按账号独立保存</span>
+      </footer>
+    </main>
+  </div>
+
+  <!-- ============ 管理控制台 ============ -->
+  <div class="admin" id="adminView" hidden>
+    <header class="topbar">
+      <div class="admin-head-left">
+        <button class="icon-btn" id="adminBack" title="返回书架"><svg class="icon"><use href="#i-back"/></svg></button>
+        <div class="admin-title">
+          <strong>管理控制台</strong>
+          <span>书库目录与账号权限</span>
+        </div>
+      </div>
+      <div class="admin-head-right">
+        <div class="admin-user"><span class="avatar avatar-sm" id="adminAvatar">墨</span><span id="adminWho">—</span></div>
+      </div>
+    </header>
+
+    <main class="admin-main">
+      <div class="admin-tabs" role="tablist">
+        <button class="admin-tab is-active" data-atab="libs" role="tab"><svg class="icon"><use href="#i-folder"/></svg>书库</button>
+        <button class="admin-tab" data-atab="users" role="tab"><svg class="icon"><use href="#i-users"/></svg>用户</button>
+        <button class="admin-tab" data-atab="settings" role="tab"><svg class="icon"><use href="#i-settings"/></svg>设置</button>
+      </div>
+
+      <section class="admin-section" id="adminLibsSection">
+        <form class="panel admin-form" id="libForm">
+          <h2>添加书库</h2>
+          <p class="panel-desc">填写服务器上的目录路径。支持嵌套目录，自动识别 EPUB、TXT、PDF、CBZ、CBR、FB2、MOBI/AZW3 与音频书；创建后会立即扫描。</p>
+          <div class="form-grid">
+            <label class="field"><span>名称</span><input name="name" placeholder="例如：小说 / 技术书" maxlength="40" required></label>
+            <label class="field"><span>服务器路径</span><input name="path" placeholder="/srv/books 或 ./books" required></label>
+            <label class="field"><span>类型</span>
+              <select name="type">
+                <option value="mixed">全部支持格式</option>
+                <option value="ebook">电子书（EPUB/TXT/FB2）</option>
+                <option value="kindle">Kindle（MOBI/AZW3）</option>
+                <option value="comic">漫画（CBZ + CBR）</option>
+                <option value="pdf">PDF 文档</option>
+                <option value="audio">有声书</option>
+                <option value="epub">仅 EPUB</option>
+                <option value="txt">仅 TXT</option>
+              </select>
+            </label>
+          </div>
+          <button class="btn btn-primary" type="submit"><svg class="icon"><use href="#i-plus"/></svg>创建并扫描</button>
+        </form>
+
+        <div class="admin-list-head">
+          <h2>已添加的书库</h2>
+          <button class="btn btn-ghost btn-sm" id="refreshLibs"><svg class="icon"><use href="#i-rotate"/></svg>刷新</button>
+        </div>
+        <div class="admin-list" id="libList"></div>
+      </section>
+
+      <section class="admin-section" id="adminUsersSection" hidden>
+        <form class="panel admin-form" id="userForm">
+          <h2 id="userFormTitle">创建用户</h2>
+          <p class="panel-desc" id="userFormDesc">为家人或朋友创建独立账号，每个人的阅读进度互不影响。</p>
+          <div class="form-grid">
+            <label class="field"><span>用户名</span><input name="username" placeholder="2-24 个字符" maxlength="24" required></label>
+            <label class="field"><span>显示名称</span><input name="displayName" placeholder="选填" maxlength="40"></label>
+            <label class="field"><span>密码</span><input name="password" type="password" placeholder="至少 6 位" autocomplete="new-password"></label>
+          </div>
+          <div class="perm-block">
+            <label class="checkbox"><input type="checkbox" name="isAdmin">设为管理员（可管理书库与用户）</label>
+            <div class="perm-libs">
+              <span class="perm-label">可访问的书库</span>
+              <div class="lib-checks" id="userLibChecks"></div>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" id="userSubmit">创建用户</button>
+            <button class="btn btn-ghost" type="button" id="userCancelEdit" hidden>取消编辑</button>
+          </div>
+        </form>
+
+        <div class="admin-list-head">
+          <h2>账号列表</h2>
+          <button class="btn btn-ghost btn-sm" id="refreshUsers"><svg class="icon"><use href="#i-rotate"/></svg>刷新</button>
+        </div>
+        <div class="admin-list" id="userList"></div>
+      </section>
+
+      <section class="admin-section" id="adminSettingsSection" hidden>
+        <form class="panel admin-form" id="ttsForm">
+          <div class="panel-head">
+            <h2>语音朗读（TTS）</h2>
+            <span class="tag" id="ttsStateTag">未配置</span>
+          </div>
+          <p class="panel-desc">读者可以在阅读器里把正文朗读出来。默认接入小米 MiMo 语音合成，密钥只保存在服务器，浏览器不会拿到原文。</p>
+          <label class="checkbox tts-enable"><input type="checkbox" name="enabled">启用语音朗读</label>
+          <div class="form-grid">
+            <label class="field"><span>服务商</span>
+              <select name="provider" id="ttsProvider">
+                <option value="mimo">小米 MiMo（chat/completions）</option>
+                <option value="openai">OpenAI 兼容（audio/speech）</option>
+              </select>
+            </label>
+            <label class="field"><span>默认音色</span><select name="voice" id="ttsAdminVoice"></select></label>
+            <label class="field"><span>模型</span>
+              <input name="model" id="ttsModel" spellcheck="false" placeholder="mimo-v2.5-tts">
+            </label>
+            <label class="field field-wide"><span>接口地址</span>
+              <input name="baseUrl" id="ttsBaseUrl" spellcheck="false" placeholder="https://api.xiaomimimo.com/v1/chat/completions">
+            </label>
+            <label class="field field-wide"><span>API Key</span>
+              <input name="apiKey" id="ttsApiKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 API Key">
+            </label>
+          </div>
+          <div class="tts-key-state" id="ttsKeyState">尚未保存 API Key</div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" id="ttsSave">保存设置</button>
+            <button class="btn btn-ghost" type="button" id="ttsTest"><svg class="icon"><use href="#i-play"/></svg>测试朗读</button>
+            <button class="btn btn-ghost" type="button" id="ttsClearKey" hidden>清除密钥</button>
+          </div>
+          <div class="tts-test-result" id="ttsTestResult" hidden></div>
+        </form>
+
+        <div class="panel admin-note">
+          <h3>配置说明</h3>
+          <p>前往 <a href="https://platform.xiaomimimo.com" target="_blank" rel="noopener noreferrer">小米 MiMo 开放平台</a> 创建 API Key，填到上方并保存。MiMo 语音合成目前限时免费，实际计费以平台为准。</p>
+          <p>朗读按 300–400 字分块合成（块尾对齐句末），音频缓存在 <code>data/tts/</code>，重复朗读同一段不会重复调用接口。修改模型或音色后，缓存会自动失效。</p>
+          <p>部署在防火墙后时，服务器需要能访问 <code>api.xiaomimimo.com</code>（或你填写的接口地址）。</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ============ 阅读器 ============ -->
+  <div class="reader" id="readerView" hidden>
+    <header class="reader-bar">
+      <div class="reader-bar-left">
+        <button class="icon-btn" id="backBtn" title="返回书架 (Esc)" aria-label="返回书架">
+          <svg class="icon"><use href="#i-back"/></svg>
+        </button>
+        <div class="reader-title">
+          <strong id="rTitle">书名</strong>
+          <span id="rChapter">章节</span>
+        </div>
+      </div>
+      <div class="reader-actions">
+        <button class="icon-btn" id="tocBtn" title="目录 (T)" aria-label="目录"><svg class="icon"><use href="#i-menu-list"/></svg></button>
+        <button class="icon-btn" id="ttsBtn" title="语音朗读 (R)" aria-label="语音朗读"><svg class="icon"><use href="#i-headphones"/></svg></button>
+        <button class="icon-btn" id="markBtn" title="书签 (B)" aria-label="书签"><svg class="icon"><use href="#i-bookmark"/></svg></button>
+        <button class="icon-btn" id="settingsBtn" title="阅读设置" aria-label="阅读设置"><svg class="icon"><use href="#i-settings"/></svg></button>
+        <button class="icon-btn" id="fullBtn" title="全屏 (F)" aria-label="全屏"><svg class="icon"><use href="#i-expand"/></svg></button>
+      </div>
+    </header>
+
+    <div class="reader-main">
+      <div class="scrim" id="scrim"></div>
+
+      <aside class="drawer drawer-left" id="tocDrawer" aria-label="目录与书签">
+        <div class="drawer-head">
+          <div class="tabs" role="tablist">
+            <button class="tab is-active" data-tab="toc" role="tab">目录</button>
+            <button class="tab" data-tab="marks" role="tab">书签 <span class="tab-count" id="markCount">0</span></button>
+            <button class="tab" data-tab="notes" role="tab">笔记 <span class="tab-count" id="noteCount">0</span></button>
+            <button class="tab" data-tab="search" role="tab">搜索</button>
+          </div>
+          <button class="icon-btn" data-close-drawer aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="drawer-scroll">
+          <ol class="toc-list" id="tocList"></ol>
+          <div class="mark-list" id="markList" hidden></div>
+          <div class="note-list" id="noteList" hidden></div>
+          <div class="search-pane" id="searchPane" hidden>
+            <div class="search-box">
+              <input type="search" id="searchInputInBook" placeholder="搜索本书内容" autocomplete="off">
+              <button class="btn btn-primary btn-sm" id="searchGo">搜索</button>
+            </div>
+            <div class="search-meta" id="searchMeta"></div>
+            <div class="search-results" id="searchResults"></div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="stage">
+        <iframe id="frame" title="正文内容"></iframe>
+        <button class="next-hint" id="nextHint">
+          下一章 <svg class="icon"><use href="#i-chevron-right"/></svg>
+        </button>
+      </div>
+
+      <div class="anno-bar" id="annoBar" hidden>
+        <span class="anno-label">划线</span>
+        <button class="anno-color" data-color="yellow" title="黄色" aria-label="黄色划线"></button>
+        <button class="anno-color" data-color="green" title="绿色" aria-label="绿色划线"></button>
+        <button class="anno-color" data-color="blue" title="蓝色" aria-label="蓝色划线"></button>
+        <button class="anno-color" data-color="pink" title="粉色" aria-label="粉色划线"></button>
+        <span class="anno-sep"></span>
+        <button class="anno-action" id="annoNote">笔记</button>
+        <button class="anno-action" id="annoCancel">取消</button>
+      </div>
+
+      <aside class="drawer drawer-right" id="settingsDrawer" aria-label="阅读设置">
+        <div class="drawer-head">
+          <h2>阅读设置</h2>
+          <button class="icon-btn" data-close-drawer aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="drawer-scroll settings-body">
+          <section class="setting">
+            <h3>翻页方式</h3>
+            <div class="seg" id="modeSeg">
+              <button data-mode="scroll">上下滚动</button>
+              <button data-mode="single">单页</button>
+              <button data-mode="spread">双页</button>
+            </div>
+            <p class="setting-hint">双页仅在大屏生效；选择上下滚动时不会分栏。</p>
+          </section>
+          <section class="setting">
+            <h3>主题</h3>
+            <div class="theme-grid" id="themeGrid">
+              <button class="theme-chip" data-theme="paper"><span class="swatch sw-paper"></span>纸白</button>
+              <button class="theme-chip" data-theme="sepia"><span class="swatch sw-sepia"></span>米黄</button>
+              <button class="theme-chip" data-theme="mint"><span class="swatch sw-mint"></span>青瓷</button>
+              <button class="theme-chip" data-theme="night"><span class="swatch sw-night"></span>夜幕</button>
+            </div>
+          </section>
+          <section class="setting">
+            <h3>字体</h3>
+            <div class="seg" id="fontSeg">
+              <button data-font="serif">宋体</button>
+              <button data-font="sans">黑体</button>
+              <button data-font="kai">楷体</button>
+            </div>
+          </section>
+          <section class="setting">
+            <h3>字号 <span class="setting-val" id="sizeVal">19 px</span></h3>
+            <div class="stepper">
+              <button id="sizeDown" aria-label="减小字号">A−</button>
+              <input type="range" id="sizeRange" min="14" max="30" step="1" value="19">
+              <button id="sizeUp" aria-label="增大字号">A+</button>
+            </div>
+          </section>
+          <section class="setting">
+            <h3>行距 <span class="setting-val" id="lineVal">1.9</span></h3>
+            <input type="range" id="lineRange" min="15" max="23" step="1" value="19">
+          </section>
+          <section class="setting">
+            <h3>版心宽度 <span class="setting-val" id="measureVal">760 px</span></h3>
+            <input type="range" id="measureRange" min="560" max="1000" step="20" value="760">
+          </section>
+          <section class="setting">
+            <h3>界面语言</h3>
+            <div class="seg" id="langSeg">
+              <button data-lang="zh">中文</button>
+              <button data-lang="en">EN</button>
+              <button data-lang="ja">日本語</button>
+              <button data-lang="ko">한국어</button>
+            </div>
+          </section>
+          <button class="btn btn-ghost" id="resetPrefs"><svg class="icon"><use href="#i-rotate"/></svg> 恢复默认</button>
+        </div>
+      </aside>
+    </div>
+
+    <div class="tts-bar" id="ttsBar" hidden>
+      <div class="tts-now">
+        <span class="tts-eyebrow"><svg class="icon"><use href="#i-headphones"/></svg>语音朗读</span>
+        <span class="tts-status" id="ttsStatus">准备中…</span>
+      </div>
+      <div class="tts-controls">
+        <button class="tts-btn" id="ttsPrev" title="上一句" aria-label="上一句"><svg class="icon"><use href="#i-prev-sentence"/></svg></button>
+        <button class="tts-btn tts-btn-main" id="ttsPlay" title="暂停" aria-label="暂停">
+          <svg class="icon" id="ttsPlayIcon"><use href="#i-pause"/></svg>
+        </button>
+        <button class="tts-btn" id="ttsNext" title="下一句" aria-label="下一句"><svg class="icon"><use href="#i-next-sentence"/></svg></button>
+      </div>
+      <label class="tts-pick"><span>音色</span><select id="ttsVoice"></select></label>
+      <label class="tts-pick"><span>语速</span>
+        <select id="ttsRate">
+          <option value="0.75">0.75×</option>
+          <option value="0.9">0.9×</option>
+          <option value="1">1.0×</option>
+          <option value="1.15">1.15×</option>
+          <option value="1.3">1.3×</option>
+          <option value="1.5">1.5×</option>
+        </select>
+      </label>
+      <button class="tts-close" id="ttsClose" aria-label="停止朗读" title="停止朗读"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+
+    <footer class="reader-foot">
+      <button class="foot-btn" id="prevBtn" title="上一章">
+        <svg class="icon"><use href="#i-chevron-left"/></svg><span class="btn-label">上一章</span>
+      </button>
+      <div class="progress-wrap">
+        <input type="range" id="progressRange" min="0" max="1000" step="1" value="0" aria-label="阅读进度">
+        <span class="progress-label" id="progressLabel">0%</span>
+      </div>
+      <button class="foot-btn" id="nextBtn" title="下一章">
+        <span class="btn-label">下一章</span><svg class="icon"><use href="#i-chevron-right"/></svg>
+      </button>
+    </footer>
+  </div>
+</div>
+
+<div class="dialog-scrim upload-scrim" id="uploadScrim" hidden>
+  <div class="upload-dialog" role="dialog" aria-modal="true" aria-labelledby="uploadTitle">
+    <div class="upload-head">
+      <div>
+        <h3 id="uploadTitle">导入书籍</h3>
+        <p>支持 EPUB / TXT / PDF / 漫画 / FB2 / MOBI / AZW3 / 有声书，可一次选择多个文件。</p>
+      </div>
+      <button class="icon-btn" id="uploadClose" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </div>
+
+    <div class="upload-target">
+      <label class="field">
+        <span>导入到</span>
+        <select id="uploadLib"></select>
+      </label>
+    </div>
+
+    <label class="upload-drop" id="uploadDrop">
+      <svg class="icon icon-lg"><use href="#i-cloud-upload"/></svg>
+      <strong>拖拽文件到此处</strong>
+      <span>或点击选择文件 · 单本最大 200 MB</span>
+      <input type="file" id="uploadPick" multiple hidden accept=".epub,.txt,.pdf,.cbz,.cbr,.fb2,.mobi,.azw,.azw3,.prc,.mp3,.m4a,.m4b,.flac,.ogg,.opus,.wav,application/epub+zip,application/pdf,audio/*">
+    </label>
+
+    <div class="upload-list" id="uploadList" aria-live="polite"></div>
+
+    <div class="upload-foot">
+      <div class="upload-total">
+        <div class="upload-total-line">
+          <span id="uploadSummary">还没有选择文件</span>
+          <span id="uploadPercent"></span>
+        </div>
+        <div class="upload-total-bar"><i id="uploadTotalBar"></i></div>
+      </div>
+      <div class="upload-actions">
+        <button class="btn btn-ghost" id="uploadCancel" type="button">取消</button>
+        <button class="btn btn-primary" id="uploadStart" type="button" disabled>开始上传</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="drop-overlay" id="dropOverlay" hidden>
+  <div class="drop-inner">
+    <svg class="icon icon-lg"><use href="#i-upload"/></svg>
+    <h3>松开即可导入</h3>
+    <p id="dropHint">支持 EPUB / TXT / PDF / 漫画 / FB2 / MOBI / AZW3 / 有声书</p>
+  </div>
+</div>
+
+<div class="dialog-scrim" id="dialogScrim" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <h3 id="dialogTitle">确认</h3>
+    <p id="dialogText"></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" id="dialogCancel">取消</button>
+      <button class="btn btn-danger" id="dialogOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<div class="dialog-scrim" id="passwordScrim" hidden>
+  <form class="dialog" id="passwordForm">
+    <h3>修改密码</h3>
+    <p>修改后当前登录仍然有效，其他设备需要重新登录。</p>
+    <label class="field"><span>当前密码</span><input type="password" id="pwCurrent" autocomplete="current-password" required></label>
+    <label class="field"><span>新密码</span><input type="password" id="pwNew" autocomplete="new-password" required></label>
+    <label class="field"><span>确认新密码</span><input type="password" id="pwConfirm" autocomplete="new-password" required></label>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" id="pwCancel">取消</button>
+      <button class="btn btn-primary" type="submit">保存</button>
+    </div>
+  </form>
+</div>
+
+<div class="dialog-scrim" id="noteScrim" hidden>
+  <div class="dialog note-dialog" role="dialog" aria-modal="true" aria-labelledby="noteTitle">
+    <h3 id="noteTitle">添加笔记</h3>
+    <blockquote class="note-quote" id="noteQuote"></blockquote>
+    <label class="field"><span>笔记（可选）</span><textarea id="noteText" rows="4" placeholder="写下你的想法…"></textarea></label>
+    <div class="note-colors" id="noteColors">
+      <button class="anno-color" data-color="yellow" type="button" aria-label="黄色"></button>
+      <button class="anno-color" data-color="green" type="button" aria-label="绿色"></button>
+      <button class="anno-color" data-color="blue" type="button" aria-label="蓝色"></button>
+      <button class="anno-color" data-color="pink" type="button" aria-label="粉色"></button>
+    </div>
+    <div class="dialog-actions note-actions">
+      <button class="btn btn-danger" type="button" id="noteDelete" hidden>删除</button>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" type="button" id="noteCancel">取消</button>
+      <button class="btn btn-primary" type="button" id="noteSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="dialog-scrim" id="sessionScrim" hidden>
+  <div class="dialog session-dialog" role="dialog" aria-modal="true" aria-labelledby="sessionTitle">
+    <h3 id="sessionTitle">登录设备</h3>
+    <p>撤销后该设备需要重新登录；当前设备会保留。</p>
+    <div class="session-list" id="sessionList"></div>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" id="sessionRevokeOthers">退出其它设备</button>
+      <button class="btn btn-primary" type="button" id="sessionClose">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="/assets/i18n.js"></script>
+<script src="/assets/app.js"></script>
+</body>
+</html>

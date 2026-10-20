@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>有声书</title>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --card: #fbf9f4;
+    --ink: #262119;
+    --muted: #7d7468;
+    --line: #e2dbcd;
+    --accent: #2f5d50;
+    --accent-ink: #f6f3ea;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .player {
+    width: min(420px, 100%);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 26px;
+    padding: 30px 26px 24px;
+    box-shadow: 0 28px 70px -40px rgba(38, 33, 25, .45);
+    text-align: center;
+  }
+  .art {
+    width: 168px;
+    height: 168px;
+    margin: 0 auto 22px;
+    border-radius: 22px;
+    display: grid;
+    place-items: center;
+    background:
+      radial-gradient(120px 80px at 30% 20%, rgba(255, 255, 255, .18), transparent 70%),
+      linear-gradient(145deg, #35695a, #22473d);
+    color: #f4f1ea;
+    box-shadow: 0 18px 40px -18px rgba(34, 71, 61, .6);
+  }
+  .art svg { width: 64px; height: 64px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+  h1 {
+    margin: 0 0 6px;
+    font-family: "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", Georgia, serif;
+    font-size: 21px;
+    font-weight: 600;
+    line-height: 1.45;
+    letter-spacing: .02em;
+    overflow-wrap: anywhere;
+  }
+  .author { margin: 0 0 22px; font-size: 12.5px; color: var(--muted); }
+  .timeline { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .time { width: 42px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #seek {
+    flex: 1;
+    height: 5px;
+    -webkit-appearance: none;
+    appearance: none;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--accent) var(--fill, 0%), var(--line) var(--fill, 0%));
+    outline: none;
+  }
+  #seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 15px; height: 15px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 3px solid var(--card);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .2);
+    cursor: pointer;
+  }
+  #seek::-moz-range-thumb {
+    width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+    border: 3px solid var(--card); cursor: pointer;
+  }
+  .controls { display: flex; align-items: center; justify-content: center; gap: 18px; }
+  .ctrl {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    font-size: 11px;
+    letter-spacing: .02em;
+    transition: background .2s, border-color .2s, transform .15s;
+  }
+  .ctrl:hover { border-color: var(--accent); background: rgba(47, 93, 80, .07); }
+  .ctrl:active { transform: scale(.96); }
+  .ctrl.play {
+    width: 64px; height: 64px;
+    border: 0;
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  .ctrl.play svg { width: 22px; height: 22px; fill: currentColor; }
+  .ctrl svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .hint { margin: 20px 0 0; font-size: 10.5px; color: var(--muted); opacity: .8; }
+  #error { display: none; margin: 14px 0 0; font-size: 12px; color: #93392f; }
+  @media (max-width: 480px) {
+    body { padding: 14px; }
+    .player { padding: 24px 20px 20px; border-radius: 22px; }
+    .art { width: 140px; height: 140px; margin-bottom: 18px; }
+  }
+</style>
+</head>
+<body>
+  <main class="player">
+    <div class="art" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v18H6.5A2.5 2.5 0 0 0 4 22z"/><path d="M4 17.5A2.5 2.5 0 0 1 6.5 15H20"/></svg>
+    </div>
+    <h1 id="title">有声书</h1>
+    <p class="author" id="author"></p>
+    <audio id="audio" preload="metadata"></audio>
+    <div class="timeline">
+      <span class="time" id="current">0:00</span>
+      <input type="range" id="seek" min="0" max="1000" value="0" aria-label="播放进度">
+      <span class="time" id="duration">--:--</span>
+    </div>
+    <div class="controls">
+      <button class="ctrl" id="back" aria-label="后退 15 秒">−15</button>
+      <button class="ctrl play" id="play" aria-label="播放">
+        <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5l11 7-11 7z"/></svg>
+      </button>
+      <button class="ctrl" id="forward" aria-label="前进 15 秒">+15</button>
+    </div>
+    <p class="hint">播放进度会自动保存</p>
+    <p id="error">无法播放该音频文件，请确认格式受浏览器支持。</p>
+  </main>
+  <script src="/assets/audioview.js"></script>
+</body>
+</html>

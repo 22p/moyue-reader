@@ -60,9 +60,30 @@ func TestRenderChapterRewritesAndSanitizes(t *testing.T) {
 	}
 }
 
+func TestRenderChapterRewritesSrcsetAndSVG(t *testing.T) {
+	raw := []byte(`<html><body>
+  <img src="../images/a.png" srcset="../images/a.png 1x, ../images/a@2x.png 2x">
+  <svg><image xlink:href="../images/svg.png"/></svg>
+  <a href="https://example.org/&quot;onmouseover=alert(1)">x</a>
+</body></html>`)
+	doc := renderChapter("book1", 1, "OEBPS/text/ch02.xhtml", raw, map[string]int{}, "", "zh-CN")
+	for _, want := range []string{
+		"OEBPS%2Fimages%2Fa.png",
+		"OEBPS%2Fimages%2Fa%402x.png",
+		"OEBPS%2Fimages%2Fsvg.png",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("missing rewritten resource %q in %s", want, doc)
+		}
+	}
+	if strings.Contains(doc, `"onmouseover=`) {
+		t.Errorf("URL attribute was not escaped: %s", doc)
+	}
+}
+
 func TestRewriteCSS(t *testing.T) {
 	ctx := &renderCtx{bookID: "b1", spine: map[string]int{}, dir: "OEBPS/styles"}
-	in := `@font-face{src:url("../fonts/a.woff2")} body{background:url('data:image/png;base64,xx')}
+	in := `@import "../styles/base.css"; @font-face{src:url("../fonts/a.woff2")} body{background:url('data:image/png;base64,xx')}
 	div{background:url(https://cdn.example/x.png)} span{background:url(../images/bg.jpg)}`
 	out := rewriteCSS(in, ctx)
 
@@ -74,6 +95,9 @@ func TestRewriteCSS(t *testing.T) {
 	}
 	if !strings.Contains(out, "https://cdn.example/x.png") {
 		t.Error("绝对地址不应被改写")
+	}
+	if !strings.Contains(out, `/api/books/b1/resource?path=OEBPS%2Fstyles%2Fbase.css`) {
+		t.Errorf("@import 未改写: %s", out)
 	}
 	if !strings.Contains(out, `url("/api/books/b1/resource?path=OEBPS%2Fimages%2Fbg.jpg")`) {
 		t.Error("背景图地址未改写")

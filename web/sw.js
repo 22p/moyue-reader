@@ -3,7 +3,7 @@
  * 避免在共用设备上把某个账号的书籍或进度写入缓存。
  */
 
-const VERSION = 'moyue-v15';
+const VERSION = 'moyue-v16';
 const CACHE = `moyue-shell-${VERSION}`;
 const OFFLINE_URL = '/offline.html';
 
@@ -14,6 +14,7 @@ const PRECACHE = [
   '/assets/app.js',
   '/assets/i18n.js',
   '/assets/audioview.js',
+  '/assets/pdfview.js',
   '/assets/icons/icon-192.png',
   '/assets/icons/icon-512.png',
   '/assets/icons/icon-maskable-512.png',

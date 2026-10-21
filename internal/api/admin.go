@@ -348,6 +348,23 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errStatus(err), "修改用户失败")
 		return
 	}
+	if hash != "" {
+		var sessionErr error
+		current := currentUser(r)
+		if current != nil && current.ID == id {
+			if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
+				sessionErr = s.store.DeleteOtherSessions(id, hashToken(cookie.Value))
+			} else {
+				sessionErr = s.store.DeleteUserSessions(id)
+			}
+		} else {
+			sessionErr = s.store.DeleteUserSessions(id)
+		}
+		if sessionErr != nil {
+			writeError(w, http.StatusInternalServerError, "密码已修改，但清理旧登录会话失败")
+			return
+		}
+	}
 	updated, _ := s.store.GetUser(id)
 	writeJSON(w, http.StatusOK, map[string]any{"user": viewUser(updated)})
 }

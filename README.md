@@ -23,7 +23,7 @@
 - 启动时自动扫描，也可在管理台手动扫描；递归子目录，展示扫描状态与失败原因
 - EPUB / FB2 / MOBI / AZW3 提取封面、作者、简介；CBZ/CBR 用第一页作封面；PDF 与音频使用文字封面占位
 - 管理员可上传、删除书籍；普通用户只能阅读和下载
-- 上传按内容哈希（SHA-256）去重，同名文件自动追加序号
+- 上传按内容哈希（SHA-256）去重，同名文件自动追加序号；单本上限 200MB
 
 **格式支持**
 
@@ -132,6 +132,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/moyue .
 
 - 可选音色：`mimo_default`、`冰糖`、`茉莉`、`苏打`、`白桦`、`Mia`、`Chloe`、`Milo`、`Dean`
 - 朗读按 300–400 字分块合成（块尾对齐句末），音频缓存在 `data/tts/`；同一音色 + 同一段只请求一次，改动模型或音色会生成新的缓存
+- 服务端只接受当前章节正文中出现的文本，并按用户限制为每分钟 20 次合成请求
 - 也支持标准 OpenAI 风格的 `/v1/audio/speech` 接口（服务商选「OpenAI 兼容」），可接入自建或第三方兼容服务
 - 仅文字书（EPUB / TXT / FB2 / MOBI / AZW3）支持朗读；PDF、漫画与有声书不显示朗读能力
 - 正文会发送给你配置的语音服务商；API Key 以明文保存在服务器的 SQLite 中，请限制 `data/` 的访问权限
@@ -157,6 +158,7 @@ Chapter 12  The Storm
 - **MOBI / AZW3**：纯 Go 解析 PalmDB、MOBI 6 与 KF8，支持 PalmDOC 与 HUFF/CDIC 压缩；按 `<h2>` / `<h1>` / 分页符拆分章节。正文样式会统一为阅读器排版，原书复杂 CSS 不保留；MOBI6 的 `recindex` 与 KF8 的 `kindle:embed` 图片可显示，SVG flow 图片可能缺失。
 - **有声书**：一个音频文件作为一本书，内置播放器支持进度拖动、±15 秒、播放进度保存；章节标记、ID3 封面与多文件合辑暂未支持。
 - 加密 MOBI/AZW3（DRM）不支持，会给出解析失败提示。
+- Kindle 文件上限 128MB；WebDAV 单本缓存上限 512MB，避免扫描或下载时耗尽内存和磁盘。
 
 ### PDF 与漫画说明
 
@@ -186,8 +188,9 @@ books/*.mobi|*.azw3|*.mp3
 - 备份时停止服务后复制 `data/` 与各个书库目录；已安装 sqlite3 时也可在运行中执行
   `sqlite3 data/moyue.db ".backup 'backup.db'"`（WAL 模式下不要直接拷贝运行中的 `.db` 文件）
 - 直接拷贝进书库目录的新文件，在下次扫描（启动或手动）后出现
-- 直接删除或移动书库内文件后，刷新书架会移除失效记录；移动后的新位置在下次扫描后出现
-- 从磁盘删除文件不会自动移除记录，避免网络存储临时离线时误删；需要时在书架上删除
+- 扫描会移除非空扫描中已不存在的记录；如果整个扫描结果为空（挂载点离线、空目录、软链接异常），会保留原有记录并在扫描状态提示，避免误删
+- 刷新书架本身不会删除记录；移动文件后的新位置会在下次扫描后出现，旧路径记录随非空扫描清理
+- 需要立即移除某本书时，可在书架上手动删除
 
 ## HTTP API
 
@@ -293,6 +296,7 @@ docker run -d --name moyue -p 8080:8080 \
 ```
 
 - 基础镜像为 `alpine:latest`，容器内以 `root` 运行，挂载目录无需调整属主
+- 容器默认 `TZ=Asia/Shanghai`，用于每日阅读统计与连续天数；其他地区请用 `-e TZ=Europe/Berlin` 等覆盖
 - 额外的书库在管理台里填容器内路径，例如 `/media/comics`
 - 镜像默认追加 `-trust-proxy`，适配 Nginx / Caddy 等反向代理；如果直接暴露 8080，请在启动命令末尾加 `-trust-proxy=false`，避免客户端伪造 `X-Forwarded-*`
 - 反向代理需转发 `X-Forwarded-Proto`，否则 Cookie 不会带 `Secure`，真实 IP 也会变成代理地址
@@ -337,7 +341,7 @@ GHCR 使用内置的 `GITHUB_TOKEN`，无需额外配置；首次推送后可在
 - 语音设置中的 API Key 以明文保存在 SQLite，部署时请限制 `data/` 目录权限
 - 权限按「书库」分配，不支持单本书级别的访问控制
 - 没有 OAuth / LDAP / 公开注册，账号由管理员创建
-- 从磁盘删除的文件不会自动清理记录；超大书库可手动触发扫描
+- 从磁盘删除的文件会在下一次非空扫描中清理；如果整个扫描为空会保留记录，超大书库可手动触发扫描
 - WebDAV 书库只缓存已打开书籍的正文；未打开的书在书架上只显示文件名、大小与类型，首次打开会有下载等待
 - WebDAV 当前使用 Basic Auth，密码以明文保存在 SQLite；建议使用专用只读账号并启用 HTTPS
 - SQLite 单文件存储，按行更新；按单机家庭 / 小团队规模设计，未做多实例共享写
@@ -347,3 +351,7 @@ GHCR 使用内置的 `GITHUB_TOKEN`，无需额外配置；首次推送后可在
 ## License
 
 MIT（内嵌的 PDF.js 为 Apache-2.0，见 `web/assets/pdfjs/LICENSE`）
+
+---
+
+[![](https://img.shields.io/badge/powered_by-dsh-4D6BFE?style=flat-square&logo=deepseek&logoColor=white)](https://github.com/deepseek-ai/deepseek-harness)

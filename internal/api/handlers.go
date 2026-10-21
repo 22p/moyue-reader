@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"moyue/internal/comic"
 	"moyue/internal/epub"
@@ -63,7 +65,7 @@ func (s *Server) listBooks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	books := s.pruneMissingLocalBooks(s.store.ListBooks())
+	books := s.store.ListBooks()
 	progress := s.store.ProgressMap(u.ID)
 	out := make([]bookView, 0, len(books))
 	for _, b := range books {
@@ -182,9 +184,14 @@ func (s *Server) bookDetail(w http.ResponseWriter, r *http.Request) {
 
 /* ------------------------------- 上传 ------------------------------- */
 
-const maxUploadBytes = 200 << 20
+const (
+	maxUploadBytes     = 200 << 20
+	maxKindleBookBytes = 128 << 20
+	maxRemoteBookBytes = 512 << 20
+)
 
 func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
+	extendReadDeadline(w, 30*time.Minute)
 	r.Body = http.MaxBytesReader(w, r.Body, 256<<20)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeError(w, http.StatusBadRequest, "上传内容过大或格式不正确")
@@ -203,7 +210,7 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 	}
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if !uploadableExt(ext) {
-		writeError(w, http.StatusBadRequest, "只支持 .epub / .txt / .pdf / .cbz / .cbr 文件")
+		writeError(w, http.StatusBadRequest, "支持 EPUB、TXT、PDF、CBZ、CBR、FB2、MOBI/AZW3 与音频文件")
 		return
 	}
 	lib, err := s.uploadTarget(r.FormValue("libraryId"))
@@ -340,7 +347,37 @@ func (s *Server) deleteBook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+func downloadExt(b *store.Book) string {
+	if ext := strings.ToLower(filepath.Ext(b.File)); ext != "" {
+		switch ext {
+		case ".epub", ".txt", ".pdf", ".cbz", ".cbr", ".fb2", ".mobi",
+			".azw", ".azw3", ".prc", ".mp3", ".m4a", ".m4b", ".flac",
+			".ogg", ".opus", ".wav":
+			return ext
+		}
+	}
+	switch b.Type {
+	case "txt":
+		return ".txt"
+	case "pdf":
+		return ".pdf"
+	case "cbz":
+		return ".cbz"
+	case "cbr":
+		return ".cbr"
+	case "fb2":
+		return ".fb2"
+	case "mobi", "azw", "azw3", "prc":
+		return "." + b.Type
+	case "audio":
+		return ".mp3"
+	default:
+		return ".epub"
+	}
+}
+
 func (s *Server) downloadBook(w http.ResponseWriter, r *http.Request) {
+	extendWriteDeadline(w, 30*time.Minute)
 	b, _, ok := s.loadBook(w, r)
 	if !ok {
 		return
@@ -349,17 +386,7 @@ func (s *Server) downloadBook(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = b.ID
 	}
-	ext := ".epub"
-	switch b.Type {
-	case "txt":
-		ext = ".txt"
-	case "pdf":
-		ext = ".pdf"
-	case "cbz":
-		ext = ".cbz"
-	case "cbr":
-		ext = ".cbr"
-	}
+	ext := downloadExt(b)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name + ext}))
 	http.ServeFile(w, r, s.bookPath(b))
@@ -591,7 +618,7 @@ func (s *Server) chapter(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
-	h.Set("Content-Security-Policy", "default-src 'none'; img-src * data: blob:; style-src * 'unsafe-inline'; font-src * data:; media-src *; script-src 'none'; object-src 'none'")
+	h.Set("Content-Security-Policy", "default-src 'none'; img-src * data: blob:; style-src * 'unsafe-inline'; font-src * data:; media-src *; script-src 'none'; object-src 'none'; form-action 'none'; base-uri 'none'")
 	_, _ = w.Write([]byte(doc))
 }
 
@@ -709,7 +736,7 @@ func (s *Server) loadBook(w http.ResponseWriter, r *http.Request) (*store.Book, 
 		writeError(w, http.StatusForbidden, "没有这本书的访问权限")
 		return nil, nil, false
 	}
-	b, err = s.ensureBookContent(b)
+	b, err = s.ensureBookContent(r.Context(), b)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "加载书籍内容失败："+err.Error())
 		return nil, nil, false
@@ -797,6 +824,9 @@ func (s *Server) parseKindle(b *store.Book) (*kindle.Book, []kindle.Chapter, err
 	info, err := os.Stat(file)
 	if err != nil {
 		return nil, nil, err
+	}
+	if info.Size() > maxKindleBookBytes {
+		return nil, nil, fmt.Errorf("Kindle 文件超过 %d MB 上限", maxKindleBookBytes>>20)
 	}
 	s.mu.RLock()
 	cached, ok := s.kindleCache[b.ID]

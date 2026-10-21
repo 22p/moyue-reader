@@ -2,8 +2,7 @@ package store
 
 import (
 	"database/sql"
-	"encoding/json"
-	"os"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -262,70 +261,6 @@ func TestDeleteUserCascadesReadingData(t *testing.T) {
 	}
 }
 
-func TestLegacyJSONMigration(t *testing.T) {
-	dir := t.TempDir()
-	now := time.Now().Truncate(time.Millisecond)
-	updated := now.Add(-time.Hour)
-	legacy := legacyState{
-		Libraries: map[string]*Library{
-			"lib1": {ID: "lib1", Name: "旧书库", Path: "/tmp/old", Type: "mixed", CreatedAt: now},
-		},
-		Users: map[string]*legacyUser{
-			"u1": {
-				ID: "u1", Username: "old", DisplayName: "旧用户", PasswordHash: "hash",
-				IsAdmin: true, Libraries: []string{"lib1"}, CreatedAt: now,
-				Progress: map[string]*Progress{
-					"b1": {Chapter: 3, ChapterPercent: 0.5, Percent: 87.5, Finished: true, Seconds: 600, UpdatedAt: &updated},
-				},
-				Bookmarks: map[string][]Bookmark{
-					"b1": {{ID: "bm1", Chapter: 3, Snippet: "旧书签", CreatedAt: now}},
-				},
-				Daily: map[string]int{now.Format("2006-01-02"): 600},
-			},
-		},
-		Books: map[string]*Book{
-			"b1": {ID: "b1", LibraryID: "lib1", Type: "epub", File: "old.epub", Title: "旧书", ChapterCount: 4, AddedAt: now},
-		},
-	}
-	raw, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "state.json"), raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	s, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-
-	u, err := s.GetUser("u1")
-	if err != nil || !u.IsAdmin || u.DisplayName != "旧用户" {
-		t.Fatalf("user = %+v, err = %v", u, err)
-	}
-	if len(u.Libraries) != 1 || u.Libraries[0] != "lib1" {
-		t.Errorf("libraries = %v", u.Libraries)
-	}
-	p := s.ProgressFor("u1", "b1")
-	if p.Chapter != 3 || p.Seconds != 600 || !p.Finished || p.UpdatedAt == nil {
-		t.Errorf("progress = %+v", p)
-	}
-	if marks := s.BookmarksFor("u1", "b1"); len(marks) != 1 || marks[0].Snippet != "旧书签" {
-		t.Errorf("bookmarks = %+v", marks)
-	}
-	if stats := s.Stats("u1"); stats.TodaySeconds != 600 || stats.Books != 1 {
-		t.Errorf("stats = %+v", stats)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "state.json")); !os.IsNotExist(err) {
-		t.Error("state.json should be renamed after migration")
-	}
-	if _, err := os.Stat(filepath.Join(dir, "state.json.migrated")); err != nil {
-		t.Error("state.json.migrated missing")
-	}
-}
-
 func TestAnnotationCRUDAndIsolation(t *testing.T) {
 	s := newTestStore(t)
 	alice := &User{Username: "alice", PasswordHash: "x"}
@@ -466,5 +401,29 @@ func TestMigrateV1SessionIDs(t *testing.T) {
 	}
 	if got, err := s.GetSetting("missing"); err != nil || got != "" {
 		t.Fatalf("missing setting = %q, err = %v", got, err)
+	}
+}
+
+func TestLastAdminCannotBeDemoted(t *testing.T) {
+	s := newTestStore(t)
+	a := &User{Username: "admin-a", PasswordHash: "x", IsAdmin: true}
+	b := &User{Username: "admin-b", PasswordHash: "x", IsAdmin: true}
+	if err := s.CreateUser(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateUser(b); err != nil {
+		t.Fatal(err)
+	}
+	demote := func(id string) error {
+		return s.UpdateUser(id, func(u *User) error {
+			u.IsAdmin = false
+			return nil
+		})
+	}
+	if err := demote(a.ID); err != nil {
+		t.Fatalf("demote first admin: %v", err)
+	}
+	if err := demote(b.ID); !errors.Is(err, ErrLastAdmin) {
+		t.Fatalf("demote last admin = %v, want ErrLastAdmin", err)
 	}
 }

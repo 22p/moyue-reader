@@ -15,34 +15,58 @@
   const id = (location.pathname.match(/\/api\/books\/([^/]+)\/audioview/) || [])[1];
   const params = new URLSearchParams(location.search);
   const startFraction = Math.max(0, Math.min(0.995, Number(params.get('start')) || 0));
-  const lang = params.get('lang') === 'en' ? 'en' : 'zh';
-  const TEXT = lang === 'en' ? {
-    fallback: 'Audiobook',
-    hint: 'Playback progress is saved automatically',
-    error: 'Unable to play this audio file. Check the format.',
-    play: 'Play',
-    pause: 'Pause',
-    back: 'Back 15 seconds',
-    forward: 'Forward 15 seconds',
-    seek: 'Playback progress',
-  } : {
-    fallback: '有声书',
-    hint: '播放进度会自动保存',
-    error: '无法播放该音频文件，请确认格式受浏览器支持。',
-    play: '播放',
-    pause: '暂停',
-    back: '后退 15 秒',
-    forward: '前进 15 秒',
-    seek: '播放进度',
-  };
-  document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
+  const langParam = params.get('lang') || 'zh';
+  const lang = ['zh', 'en', 'ja', 'ko'].includes(langParam) ? langParam : 'zh';
+  const TEXT = {
+    zh: {
+      fallback: '有声书',
+      hint: '播放进度会自动保存',
+      error: '无法播放该音频文件，请确认格式受浏览器支持。',
+      play: '播放',
+      pause: '暂停',
+      back: '后退 15 秒',
+      forward: '前进 15 秒',
+      seek: '播放进度',
+    },
+    en: {
+      fallback: 'Audiobook',
+      hint: 'Playback progress is saved automatically',
+      error: 'Unable to play this audio file. Check the format.',
+      play: 'Play',
+      pause: 'Pause',
+      back: 'Back 15 seconds',
+      forward: 'Forward 15 seconds',
+      seek: 'Playback progress',
+    },
+    ja: {
+      fallback: 'オーディオブック',
+      hint: '再生位置は自動的に保存されます',
+      error: 'この音声ファイルを再生できません。形式を確認してください。',
+      play: '再生',
+      pause: '一時停止',
+      back: '15秒戻る',
+      forward: '15秒進む',
+      seek: '再生位置',
+    },
+    ko: {
+      fallback: '오디오북',
+      hint: '재생 위치가 자동으로 저장됩니다',
+      error: '이 오디오 파일을 재생할 수 없습니다. 형식을 확인하세요.',
+      play: '재생',
+      pause: '일시정지',
+      back: '15초 뒤로',
+      forward: '15초 앞으로',
+      seek: '재생 위치',
+    },
+  }[lang];
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang;
   if (id) audio.src = `/api/books/${id}/audio`;
 
   const title = params.get('title') || TEXT.fallback;
   const author = params.get('author') || '';
   titleEl.textContent = title;
   authorEl.textContent = author;
-  document.title = title + ' · ' + (lang === 'en' ? 'Moyue' : '墨阅');
+  document.title = title + ' · ' + (lang === 'zh' ? '墨阅' : 'Moyue');
   document.querySelector('.hint').textContent = TEXT.hint;
   document.getElementById('error').textContent = TEXT.error;
   seek.setAttribute('aria-label', TEXT.seek);

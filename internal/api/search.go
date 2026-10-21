@@ -33,6 +33,12 @@ func htmlToText(s string) string {
 	return strings.TrimSpace(reSpaces.ReplaceAllString(s, " "))
 }
 
+const (
+	maxSearchHits     = 80
+	maxSearchChapters = 600
+	maxSearchBytes    = 64 << 20
+)
+
 func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 	b, _, ok := s.loadBook(w, r)
 	if !ok {
@@ -44,7 +50,32 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var chapters []searchChapter
+	results := make([]searchHit, 0, 16)
+	truncated := false
+	scannedBytes := 0
+	addChapter := func(index int, title, text string) bool {
+		if len(results) >= maxSearchHits {
+			truncated = true
+			return false
+		}
+		scannedBytes += len(text)
+		if scannedBytes > maxSearchBytes {
+			truncated = true
+			return false
+		}
+		hits := searchText(searchChapter{Index: index, Title: title, Text: text}, q, 3)
+		if room := maxSearchHits - len(results); len(hits) > room {
+			hits = hits[:room]
+			truncated = true
+		}
+		results = append(results, hits...)
+		if len(results) >= maxSearchHits {
+			truncated = true
+			return false
+		}
+		return true
+	}
+
 	switch b.Type {
 	case "txt":
 		tb, err := s.parseTXT(b)
@@ -53,11 +84,17 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i, ch := range tb.Chapters {
+			if i >= maxSearchChapters {
+				truncated = true
+				break
+			}
 			start, end := ch.Start, ch.End
 			if start < 0 || end > len(tb.Text) || start >= end {
 				continue
 			}
-			chapters = append(chapters, searchChapter{Index: i, Title: ch.Title, Text: tb.Text[start:end]})
+			if !addChapter(i, ch.Title, tb.Text[start:end]) {
+				break
+			}
 		}
 	case "fb2":
 		fb, err := s.parseFB2(b)
@@ -66,7 +103,13 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i, ch := range fb.Chapters {
-			chapters = append(chapters, searchChapter{Index: i, Title: ch.Title, Text: htmlToText(ch.HTML)})
+			if i >= maxSearchChapters {
+				truncated = true
+				break
+			}
+			if !addChapter(i, ch.Title, htmlToText(ch.HTML)) {
+				break
+			}
 		}
 	case "mobi", "azw", "azw3", "prc":
 		_, list, err := s.parseKindle(b)
@@ -75,7 +118,13 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i, ch := range list {
-			chapters = append(chapters, searchChapter{Index: i, Title: ch.Title, Text: htmlToText(ch.HTML)})
+			if i >= maxSearchChapters {
+				truncated = true
+				break
+			}
+			if !addChapter(i, ch.Title, htmlToText(ch.HTML)) {
+				break
+			}
 		}
 	case "epub":
 		eb, err := s.parseEPUB(b)
@@ -90,32 +139,25 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 		}
 		defer ar.Close()
 		for i, ch := range eb.Chapters {
-			if i >= 600 {
+			if i >= maxSearchChapters {
+				truncated = true
 				break
 			}
 			raw, err := ar.Read(ch.Href)
 			if err != nil {
 				continue
 			}
-			chapters = append(chapters, searchChapter{Index: i, Title: ch.Title, Text: htmlToText(string(raw))})
+			if !addChapter(i, ch.Title, htmlToText(string(raw))) {
+				break
+			}
 		}
 	default:
 		writeError(w, http.StatusBadRequest, "该格式暂不支持全文搜索")
 		return
 	}
 
-	results := make([]searchHit, 0, 16)
-	truncated := false
-	for _, ch := range chapters {
-		if len(results) >= 80 {
-			truncated = true
-			break
-		}
-		hits := searchText(ch, q, 3)
-		results = append(results, hits...)
-	}
-	if len(results) > 80 {
-		results = results[:80]
+	if len(results) > maxSearchHits {
+		results = results[:maxSearchHits]
 		truncated = true
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results, "truncated": truncated})

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -101,16 +102,62 @@ func Decode(data []byte) (string, string) {
 	if utf8.Valid(data) {
 		return string(data), "utf-8"
 	}
-	if out, err := simplifiedchinese.GB18030.NewDecoder().Bytes(data); err == nil {
-		text := string(out)
-		if replacementRatio(text) < 0.02 {
-			return text, "gb18030"
+	gbText, gbErr := simplifiedchinese.GB18030.NewDecoder().Bytes(data)
+	bigText, bigErr := traditionalchinese.Big5.NewDecoder().Bytes(data)
+	gb, big := string(gbText), string(bigText)
+	switch {
+	case gbErr == nil && bigErr == nil:
+		// GB18030 和 Big5 的字节范围有重叠，不能只按“能否解码”判断。
+		// 用常见汉字、CJK/私用区与替换字符给两个候选打分。
+		if textScore(big) > textScore(gb) {
+			return big, "big5"
+		}
+		return gb, "gb18030"
+	case gbErr == nil:
+		return gb, "gb18030"
+	case bigErr == nil:
+		return big, "big5"
+	default:
+		return string(data), "unknown"
+	}
+}
+
+// commonHan 覆盖常见简体/繁体字，用于区分 GB18030 与 Big5 的错误解码。
+const commonHan = "的一是不了在人有我他她它这那中文大山水海天日年月时上下左右前后风雨云山海书页故事" +
+	"我們你們來時個國會發現實這點為與說後裡東車長開關頭題"
+
+func textScore(s string) int {
+	score, runes := 0, 0
+	for _, r := range s {
+		runes++
+		switch {
+		case r == utf8.RuneError:
+			score -= 40
+		case r >= 0xE000 && r <= 0xF8FF:
+			score -= 20
+		case r < 0x20 && r != '\n' && r != '\r' && r != '\t':
+			score -= 10
+		case r >= 0x4E00 && r <= 0x9FFF:
+			score += 4
+			if strings.ContainsRune(commonHan, r) {
+				score += 4
+			}
+		case r >= 0x3400 && r <= 0x4DBF:
+			score += 1
+		case unicode.Is(unicode.Han, r):
+			score += 2
+		case unicode.IsPunct(r):
+			score += 1
+		case unicode.IsSpace(r), unicode.IsDigit(r), unicode.Is(unicode.Latin, r):
+			// 中性字符
+		default:
+			score -= 2
 		}
 	}
-	if out, err := traditionalchinese.Big5.NewDecoder().Bytes(data); err == nil {
-		return string(out), "big5"
+	if runes == 0 {
+		return -100
 	}
-	return string(data), "unknown"
+	return score
 }
 
 func decodeUTF16(b []byte, little bool) string {
@@ -123,20 +170,6 @@ func decodeUTF16(b []byte, little bool) string {
 		}
 	}
 	return string(utf16.Decode(units))
-}
-
-func replacementRatio(s string) float64 {
-	if s == "" {
-		return 1
-	}
-	bad, total := 0, 0
-	for _, r := range s {
-		total++
-		if r == utf8.RuneError {
-			bad++
-		}
-	}
-	return float64(bad) / float64(total)
 }
 
 // IsHeading 判断一行是否是章节标题。

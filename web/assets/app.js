@@ -380,6 +380,7 @@
     pendingAnnotation: '',
     pendingSearch: null,
     searchDone: false,
+    searchSeq: 0,
     admin: { libraries: [], users: [], tab: 'libs', editUserId: null, poll: 0, tts: null, ttsClearKey: false },
   };
 
@@ -753,11 +754,11 @@
     el.continueCard.hidden = false;
     el.continueCard.innerHTML = `
       <div class="continue-inner">
-        <div class="continue-cover" data-open="${book.id}" role="button" tabindex="0" aria-label="继续阅读 ${esc(book.title)}">
+        <div class="continue-cover" data-open="${book.id}" role="button" tabindex="0" aria-label="${esc(tr('继续阅读'))} ${esc(book.title)}">
           ${coverMarkup(book)}
         </div>
         <div class="continue-text">
-          <span class="eyebrow">继续阅读 · ${relativeTime(book.progress.updatedAt)}</span>
+          <span class="eyebrow">${tr('继续阅读')} · ${relativeTime(book.progress.updatedAt)}</span>
           <h2 title="${esc(book.title)}">${esc(book.title)}</h2>
           <p>${esc(book.creator || '佚名')} · 第 ${chapter} ${unit} · 已读 ${p}%</p>
           <div class="continue-bar"><i style="width:${clamp(p, 0, 100)}%"></i></div>
@@ -1006,23 +1007,24 @@
   }
 
   function scanText(scan) {
-    if (!scan) return '尚未扫描';
+    if (!scan) return tr('尚未扫描');
     if (scan.running) {
-      return `<span class="spinner-sm"></span>正在扫描… 已入库 ${scan.added || 0} 本`;
+      return `<span class="spinner-sm"></span>${esc(tr(`正在扫描… 已入库 ${scan.added || 0} 本`))}`;
     }
     const parts = [];
-    if (scan.lastScan) parts.push(`上次扫描 ${relativeTime(scan.lastScan)}`);
-    parts.push(`新增 ${scan.added || 0} · 更新 ${scan.updated || 0} · 跳过 ${scan.skipped || 0}`);
+    if (scan.lastScan) parts.push(`${tr('上次扫描')} ${tr(relativeTime(scan.lastScan))}`);
+    parts.push(tr(`新增 ${scan.added || 0} · 更新 ${scan.updated || 0} · 跳过 ${scan.skipped || 0}`));
     if (scan.removed) parts.push(tr(`移除 ${scan.removed}`));
-    if (scan.failed) parts.push(`失败 ${scan.failed}`);
+    if (scan.failed) parts.push(tr(`失败 ${scan.failed}`));
     return esc(parts.join(' · '));
   }
 
   function libTypeLabel(type) {
-    return {
+    const label = {
       txt: 'TXT', epub: 'EPUB', ebook: '电子书', comic: '漫画', pdf: 'PDF',
       kindle: 'Kindle', audio: '有声书', mixed: '全部格式',
     }[type] || type;
+    return tr(label);
   }
 
   function renderAdminLibraries() {
@@ -1687,20 +1689,77 @@
     loadChapter(annotation.chapter, 0);
   }
 
-  function scrollToQuery(query) {
+  function revealRect(rect) {
+    if (!rect) return;
+    const win = el.frame.contentWindow;
+    if (!win) return;
+    if (isPaginated() && state.page.active) {
+      const x = rect.left + state.page.page * state.page.vw;
+      const page = clamp(Math.floor((x + 6) / state.page.vw), 0, state.page.pages - 1);
+      if (page !== state.page.page) setPage(page);
+      return;
+    }
+    if (rect.top >= 0 && rect.bottom <= (win.innerHeight || 0)) return;
+    const doc = el.frame.contentDocument;
+    const scroller = doc?.scrollingElement || doc?.documentElement;
+    const currentTop = win.scrollY || scroller?.scrollTop || 0;
+    const targetTop = rect.top + currentTop - (win.innerHeight || 0) * 0.3;
+    win.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  }
+
+  function scrollToQuery(query, fraction = 0) {
     const doc = el.frame.contentDocument;
     const win = el.frame.contentWindow;
     if (!doc || !win || !query) return;
     const needle = query.toLowerCase();
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
-    while (walker.nextNode()) {
-      const node = walker.currentNode;
-      if ((node.nodeValue || '').toLowerCase().includes(needle)) {
-        const target = node.parentElement;
-        if (target) revealInPage(target);
-        return;
+    const nodes = textNodes(doc);
+    if (!nodes.length) return;
+    const total = nodes[nodes.length - 1].end;
+    const wanted = clamp(Number(fraction) || 0, 0, 1) * total;
+    let best = null;
+    for (const tn of nodes) {
+      const value = (tn.node.nodeValue || '').toLowerCase();
+      let from = 0;
+      while (from <= value.length) {
+        const idx = value.indexOf(needle, from);
+        if (idx < 0) break;
+        const absolute = tn.start + idx;
+        const dist = Math.abs(absolute - wanted);
+        if (!best || dist < best.dist) best = { tn, idx, dist };
+        from = idx + Math.max(1, needle.length);
       }
     }
+    if (!best) return;
+    const range = doc.createRange();
+    range.setStart(best.tn.node, best.idx);
+    range.setEnd(best.tn.node, Math.min(best.tn.node.nodeValue.length, best.idx + query.length));
+    revealRect(range.getBoundingClientRect());
+  }
+
+  function jumpToSearchHit(hit) {
+    const book = state.current;
+    if (!book) return;
+    const chapter = Number(hit.dataset.chapter);
+    const percent = clamp(Number(hit.dataset.percent) || 0, 0, 1);
+    const q = hit.dataset.query || '';
+    state.pendingSearch = { q, chapter, percent };
+    if (chapter === state.chapter && isTextBook(book) && el.frame.contentDocument?.body) {
+      state.pendingSearch = null;
+      state.fraction = percent;
+      state.pendingFraction = percent;
+      if (prefs.mode === 'scroll') {
+        restoreScroll(percent);
+        requestAnimationFrame(() => restoreScroll(percent));
+      } else {
+        paginateText(percent);
+      }
+      updateChrome();
+      updateProgressUI();
+      scheduleSave();
+      setTimeout(() => scrollToQuery(q, percent), 80);
+      return;
+    }
+    loadChapter(chapter, percent);
   }
 
   async function runSearch() {
@@ -1718,8 +1777,10 @@
     }
     el.searchMeta.textContent = '搜索中…';
     el.searchResults.innerHTML = '';
+    const seq = ++state.searchSeq;
     try {
       const data = await api.search(book.id, q);
+      if (seq !== state.searchSeq || state.current?.id !== book.id) return;
       state.searchDone = true;
       const results = data.results || [];
       if (results.length === 0) {
@@ -1767,6 +1828,15 @@
       syncSettingsUI();
       updateChrome();
       if (state.tts.active) renderTTSBar();
+      if (isAudio(state.current)) {
+        state.audioReady = false;
+        state.audioBook = '';
+        loadChapter(state.chapter, state.fraction);
+      } else if (state.current.type === 'pdf') {
+        state.pdf.ready = false;
+        state.pdf.loading = false;
+        loadChapter(state.chapter, state.fraction);
+      }
     } else if (state.view === 'library') {
       renderLibrarySwitch();
       renderStats();
@@ -1776,6 +1846,7 @@
       renderAdminLibraries();
       renderAdminUsers();
     }
+    if (!el.uploadScrim.hidden) renderUploadList();
   }
 
   function syncLangUI() {
@@ -2013,7 +2084,7 @@
       } else if (!state.pdf.loading) {
         state.pdf.loading = true;
         fadeFrameOut();
-        el.frame.src = `/api/books/${book.id}/pdfview?page=${index + 1}${wantSpread ? '&spread=1' : ''}`;
+        el.frame.src = `/api/books/${book.id}/pdfview?page=${index + 1}${wantSpread ? '&spread=1' : ''}&lang=${encodeURIComponent(prefs.lang || 'zh')}`;
       }
       scheduleSave();
       return;
@@ -2098,7 +2169,7 @@
       return;
     }
     if (data.type === 'moyue-audio-error') {
-      toast(data.message || '音频播放失败', { type: 'error' });
+      toast(tr(data.message || '音频播放失败'), { type: 'error' });
       return;
     }
     if (data.type === 'moyue-pdf-ready') {
@@ -2108,7 +2179,7 @@
       if (data.pages > 0) {
         state.pdf.pages = data.pages;
       } else {
-        toast('PDF 加载失败' + (data.error ? '：' + data.error : ''), { type: 'error' });
+        toast(tr('PDF 加载失败') + (data.error ? '：' + data.error : ''), { type: 'error' });
         return;
       }
       postPDFTheme();
@@ -2346,19 +2417,20 @@
     state.page.vw = step;
     state.page.page = 0;
     const target = Math.round(clamp(fraction, 0, 1) * (pages - 1));
-    setPage(target, { save: false });
+    // 单页章节没有“页内位置”可表达；保留已读完状态，避免把 fraction=1 写成 0。
+    setPage(target, { save: false, onePageFraction: clamp(fraction, 0, 1) });
 
     requestAnimationFrame(() => {
       if (state.page.active && doc.body) doc.body.style.transition = 'transform .22s ease';
     });
   }
 
-  function setPage(index, { save = true } = {}) {
+  function setPage(index, { save = true, onePageFraction = 0 } = {}) {
     if (!state.page.active) return;
     const total = Math.max(1, state.page.pages);
     const page = clamp(index, 0, total - 1);
     state.page.page = page;
-    state.fraction = total > 1 ? page / (total - 1) : 0;
+    state.fraction = total > 1 ? page / (total - 1) : clamp(onePageFraction, 0, 1);
     const doc = el.frame.contentDocument;
     if (doc && doc.body) {
       const offset = Math.round(page * state.page.vw);
@@ -2469,9 +2541,9 @@
       setTimeout(() => focusAnnotation(id, null), 550);
     }
     if (state.pendingSearch && state.pendingSearch.chapter === state.chapter) {
-      const q = state.pendingSearch.q;
+      const { q, percent } = state.pendingSearch;
       state.pendingSearch = null;
-      setTimeout(() => scrollToQuery(q), 650);
+      setTimeout(() => scrollToQuery(q, percent), 650);
     }
   }
 
@@ -2598,6 +2670,7 @@
       if (!detail.chapters || detail.chapters.length === 0) throw new Error('这本书没有可阅读的章节');
 
       state.current = detail;
+      state.searchSeq++;
       const total = detail.chapters.length;
       state.chapter = options.chapter ?? clamp(detail.progress?.chapter || 0, 0, total - 1);
       state.fraction = options.fraction ?? clamp(detail.progress?.chapterPercent || 0, 0, 1);
@@ -3066,7 +3139,7 @@
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: prefs.ttsVoice }),
+      body: JSON.stringify({ chapter: state.chapter, text, voice: prefs.ttsVoice }),
     });
     if (!res.ok) {
       let message = `语音合成失败（${res.status}）`;
@@ -3535,12 +3608,12 @@
 
   function uploadStatusText(item) {
     switch (item.status) {
-      case 'uploading': return `正在上传 ${Math.round(item.progress * 100)}%`;
-      case 'parsing': return '校验并解析文件…';
-      case 'done': return item.title ? `已导入《${item.title}》` : '已导入';
-      case 'duplicate': return `已在书架中${item.title ? `：《${item.title}》` : ''}`;
-      case 'error': return item.error || '上传失败';
-      default: return '等待上传';
+      case 'uploading': return tr(`正在上传 ${Math.round(item.progress * 100)}%`);
+      case 'parsing': return tr('校验并解析文件…');
+      case 'done': return item.title ? tr(`已导入《${item.title}》`) : tr('已导入');
+      case 'duplicate': return item.title ? tr(`已在书架中：《${item.title}》`) : tr('已在书架中');
+      case 'error': return tr(item.error || '上传失败');
+      default: return tr('等待上传');
     }
   }
 
@@ -3589,18 +3662,18 @@
     el.uploadTotalBar.style.width = `${percent}%`;
     el.uploadPercent.textContent = items.length ? `${Math.round(percent)}%` : '';
     if (!items.length) {
-      el.uploadSummary.textContent = '还没有选择文件';
+      el.uploadSummary.textContent = tr('还没有选择文件');
     } else if (state.upload.running) {
       const active = items.find((i) => i.status === 'parsing' || i.status === 'uploading');
       el.uploadSummary.textContent = active && active.status === 'parsing'
-        ? `正在解析《${active.file.name}》…`
-        : `正在导入 ${done} / ${items.length} 个文件`;
+        ? tr(`正在解析《${active.file.name}》…`)
+        : tr(`正在导入 ${done} / ${items.length} 个文件`);
     } else if (done + failed === items.length) {
       el.uploadSummary.textContent = failed
-        ? `完成 ${done} 个 · 失败 ${failed} 个`
-        : `已完成 ${done} 个文件`;
+        ? tr(`完成 ${done} 个 · 失败 ${failed} 个`)
+        : tr(`已完成 ${done} 个文件`);
     } else {
-      el.uploadSummary.textContent = `已选择 ${items.length} 个文件 · ${fmtBytes(totalBytes)}`;
+      el.uploadSummary.textContent = tr(`已选择 ${items.length} 个文件 · ${fmtBytes(totalBytes)}`);
     }
 
     const pending = items.some((i) => i.status === 'pending' || i.status === 'error');
@@ -4338,7 +4411,7 @@
       return;
     }
     const btn = e.target.closest('[data-chapter]');
-    if (btn && !btn.disabled) {
+    if (btn && !btn.disabled && !btn.closest('.search-hit')) {
       const index = Number(btn.dataset.chapter);
       if (index >= 0) {
         loadChapter(index, 0);
@@ -4365,8 +4438,7 @@
     }
     const hit = e.target.closest('.search-hit');
     if (hit) {
-      state.pendingSearch = { q: hit.dataset.query, chapter: Number(hit.dataset.chapter) };
-      loadChapter(Number(hit.dataset.chapter), Number(hit.dataset.percent) || 0);
+      jumpToSearchHit(hit);
       if (window.innerWidth <= 860) closeDrawers();
       return;
     }

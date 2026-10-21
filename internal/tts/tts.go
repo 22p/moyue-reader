@@ -168,7 +168,16 @@ type Client struct {
 // NewClient 创建客户端。cacheDir 为空表示不缓存。
 func NewClient(cacheDir string) *Client {
 	return &Client{
-		HTTP:     &http.Client{Timeout: 90 * time.Second},
+		HTTP: &http.Client{
+			Timeout: 90 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// 自定义 api-key 头不属于 Go 默认会跨主机剥离的敏感头，手动处理。
+				if len(via) > 0 && !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+					req.Header.Del("api-key")
+				}
+				return nil
+			},
+		},
 		CacheDir: cacheDir,
 	}
 }

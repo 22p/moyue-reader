@@ -248,10 +248,6 @@ func Open(dir string) (*Store, error) {
 	for _, suffix := range []string{"-wal", "-shm"} {
 		_ = os.Chmod(dbPath+suffix, 0o600)
 	}
-	if err := s.importLegacyJSON(dir); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("迁移 state.json：%w", err)
-	}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("升级数据库：%w", err)
@@ -465,8 +461,19 @@ FROM users WHERE id = ?`, id)
 	if err := loadUserLibraries(tx, u); err != nil {
 		return err
 	}
+	wasAdmin := u.IsAdmin
 	if err := fn(u); err != nil {
 		return err
+	}
+	// 降级管理员必须在同一事务内检查，避免并发请求同时把最后几个管理员降级。
+	if wasAdmin && !u.IsAdmin {
+		var admins int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE is_admin = 1`).Scan(&admins); err != nil {
+			return err
+		}
+		if admins <= 1 {
+			return ErrLastAdmin
+		}
 	}
 	_, err = tx.Exec(`UPDATE users SET username = ?, display_name = ?, password_hash = ?, is_admin = ?
 WHERE id = ?`, u.Username, u.DisplayName, u.PasswordHash, boolInt(u.IsAdmin), u.ID)
@@ -633,6 +640,12 @@ func (s *Store) DeleteSessionByID(userID, id string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// DeleteUserSessions 注销该用户的全部登录会话。
+func (s *Store) DeleteUserSessions(userID string) error {
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE user_id = ?`, userID)
+	return err
 }
 
 // DeleteOtherSessions 保留当前会话，注销该用户的其它登录。

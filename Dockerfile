@@ -10,6 +10,8 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/moyue .
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata \
     && mkdir -p /app/books /app/data
+# 默认按中文用户时区聚合每日阅读统计；其他地区用 -e TZ=... 覆盖。
+ENV TZ=Asia/Shanghai
 COPY --from=build /out/moyue /usr/local/bin/moyue
 WORKDIR /app
 EXPOSE 8080

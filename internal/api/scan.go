@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +89,12 @@ func (c *scanCounts) fail(err error) {
 }
 
 func (s *Server) runScan(libID string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("书库扫描异常", "library", libID, "err", rec, "stack", string(debug.Stack()))
+			s.finishScan(libID, 0, 0, 0, 0, 1, fmt.Sprintf("扫描异常：%v", rec))
+		}
+	}()
 	lib, err := s.store.GetLibrary(libID)
 	if err != nil {
 		s.finishScan(libID, 0, 0, 0, 0, 1, "书库不存在")
@@ -101,48 +108,61 @@ func (s *Server) runScan(libID string) {
 	counts := &scanCounts{}
 	seen := map[string]bool{}
 	clean := true
-	err = filepath.WalkDir(lib.Path, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			counts.fail(walkErr)
-			clean = false
-			return nil
-		}
-		if d.IsDir() {
-			if p != lib.Path {
-				name := d.Name()
-				if strings.HasPrefix(name, ".") || name == "node_modules" || name == "@eaDir" {
-					return fs.SkipDir
-				}
-			}
-			return nil
-		}
-		if !supportedFile(lib.Type, p) {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			counts.fail(err)
-			clean = false
-			return nil
-		}
-		rel, err := filepath.Rel(lib.Path, p)
-		if err != nil || strings.HasPrefix(rel, "..") {
-			counts.fail(err)
-			clean = false
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		seen[store.BookID(lib.ID, rel)] = true
-		s.processScannedFile(lib, rel, p, info, counts)
-		return nil
-	})
-	if err != nil {
-		counts.fail(err)
+	before := s.store.BookCount(lib.ID)
+	root := lib.Path
+	if resolved, err := filepath.EvalSymlinks(lib.Path); err == nil {
+		root = resolved
+	} else {
+		counts.fail(fmt.Errorf("书库路径不可访问：%w", err))
 		clean = false
 	}
 	if clean {
-		removed, err := s.store.PruneBooks(lib.ID, seen)
+		err = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				counts.fail(walkErr)
+				clean = false
+				return nil
+			}
+			if d.IsDir() {
+				if p != root {
+					name := d.Name()
+					if strings.HasPrefix(name, ".") || name == "node_modules" || name == "@eaDir" {
+						return fs.SkipDir
+					}
+				}
+				return nil
+			}
+			if !supportedFile(lib.Type, p) {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				counts.fail(err)
+				clean = false
+				return nil
+			}
+			rel, err := filepath.Rel(root, p)
+			if err != nil || strings.HasPrefix(rel, "..") {
+				counts.fail(err)
+				clean = false
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			seen[store.BookID(lib.ID, rel)] = true
+			s.processScannedFile(lib, rel, p, info, counts)
+			return nil
+		})
 		if err != nil {
+			counts.fail(err)
+			clean = false
+		}
+	}
+	if clean {
+		// 空目录/未挂载的挂载点会让扫描结果为空。此时保留原有记录，
+		// 避免网络存储短暂离线或被清空时连带删除所有用户的阅读数据。
+		if len(seen) == 0 && before > 0 {
+			counts.fail(fmt.Errorf("扫描结果为空，已保留原有 %d 条书籍记录，请检查书库挂载", before))
+		} else if removed, err := s.store.PruneBooks(lib.ID, seen); err != nil {
 			counts.fail(err)
 		} else {
 			counts.removed = removed
@@ -171,6 +191,7 @@ func (s *Server) runWebDAVScan(lib *store.Library) {
 	}
 
 	seen := map[string]bool{}
+	before := s.store.BookCount(lib.ID)
 	for _, rf := range files {
 		if !supportedFile(lib.Type, rf.Path) {
 			continue
@@ -210,13 +231,17 @@ func (s *Server) runWebDAVScan(lib *store.Library) {
 		s.updateScanProgress(lib.ID, counts.added, counts.updated, counts.skipped, counts.failed)
 	}
 
-	removed, err := s.store.PruneBooks(lib.ID, seen)
-	if err != nil {
-		counts.fail(err)
+	if len(seen) == 0 && before > 0 {
+		counts.fail(fmt.Errorf("WebDAV 扫描结果为空，已保留原有 %d 条书籍记录与缓存", before))
 	} else {
-		counts.removed = removed
+		removed, err := s.store.PruneBooks(lib.ID, seen)
+		if err != nil {
+			counts.fail(err)
+		} else {
+			counts.removed = removed
+		}
+		s.pruneWebDAVCache(lib, seen)
 	}
-	s.pruneWebDAVCache(lib, seen)
 	s.finishScan(lib.ID, counts.added, counts.updated, counts.skipped, counts.removed, counts.failed, counts.firstErr)
 	slog.Info("WebDAV 书库扫描完成", "library", lib.Name,
 		"added", counts.added, "updated", counts.updated,
@@ -284,6 +309,12 @@ func bookType(rel string) string {
 }
 
 func (s *Server) processScannedFile(lib *store.Library, rel, full string, info os.FileInfo, counts *scanCounts) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			counts.fail(fmt.Errorf("%s: 解析异常: %v", rel, rec))
+			slog.Error("解析书籍异常", "file", full, "err", rec, "stack", string(debug.Stack()))
+		}
+	}()
 	id := store.BookID(lib.ID, rel)
 	existing, _ := s.store.GetBook(id)
 	if existing != nil && existing.Size == info.Size() && existing.ModTime == info.ModTime().UnixNano() {
@@ -311,36 +342,6 @@ func (s *Server) processScannedFile(lib *store.Library, rel, full string, info o
 		s.clearBookCache(book.ID)
 	}
 	s.updateScanProgress(lib.ID, counts.added, counts.updated, counts.skipped, counts.failed)
-}
-
-// pruneMissingLocalBooks 清理本地书库中已经从磁盘删除或移动的书籍记录。
-// 书库根目录不可访问时跳过，避免网络存储临时离线导致误删。
-func (s *Server) pruneMissingLocalBooks(books []*store.Book) []*store.Book {
-	libs := s.store.ListLibraries()
-	byID := make(map[string]*store.Library, len(libs))
-	for _, lib := range libs {
-		byID[lib.ID] = lib
-	}
-	kept := make([]*store.Book, 0, len(books))
-	for _, b := range books {
-		lib := byID[b.LibraryID]
-		if lib == nil || lib.Kind == "webdav" {
-			kept = append(kept, b)
-			continue
-		}
-		if info, err := os.Stat(lib.Path); err != nil || !info.IsDir() {
-			kept = append(kept, b)
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(lib.Path, filepath.FromSlash(b.File))); os.IsNotExist(err) {
-			if err := s.store.DeleteBook(b.ID); err == nil {
-				s.clearBookCache(b.ID)
-			}
-			continue
-		}
-		kept = append(kept, b)
-	}
-	return kept
 }
 
 func pathInside(root, target string) bool {
@@ -487,6 +488,9 @@ func (s *Server) buildBook(lib *store.Library, rel, full string, info os.FileInf
 		b.HasCover = fb.Cover != ""
 		b.ChapterCount = len(fb.Chapters)
 	case ".mobi", ".azw", ".azw3", ".prc":
+		if info.Size() > maxKindleBookBytes {
+			return nil, fmt.Errorf("Kindle 文件超过 %d MB 上限", maxKindleBookBytes>>20)
+		}
 		kb, err := kindle.Open(full)
 		if err != nil {
 			return nil, err

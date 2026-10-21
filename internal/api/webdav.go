@@ -11,9 +11,26 @@ import (
 	"moyue/internal/webdav"
 )
 
+// lockWebDAVBook 为单本书加锁，避免一本慢速远端书阻塞其它 WebDAV 书籍。
+func (s *Server) lockWebDAVBook(ctx context.Context, id string) (func(), error) {
+	s.webdavMu.Lock()
+	ch := s.webdavLocks[id]
+	if ch == nil {
+		ch = make(chan struct{}, 1)
+		s.webdavLocks[id] = ch
+	}
+	s.webdavMu.Unlock()
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // ensureBookContent 在首次打开 WebDAV 书籍时按需下载并解析。
 // 本地书库直接返回原记录。
-func (s *Server) ensureBookContent(b *store.Book) (*store.Book, error) {
+func (s *Server) ensureBookContent(ctx context.Context, b *store.Book) (*store.Book, error) {
 	if b == nil {
 		return nil, fmt.Errorf("书籍不存在")
 	}
@@ -25,8 +42,11 @@ func (s *Server) ensureBookContent(b *store.Book) (*store.Book, error) {
 		return b, nil
 	}
 
-	s.webdavMu.Lock()
-	defer s.webdavMu.Unlock()
+	unlock, err := s.lockWebDAVBook(ctx, b.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	// 等锁期间可能已被另一个请求下载并解析完成。
 	if latest, err := s.store.GetBook(b.ID); err == nil {
@@ -46,15 +66,18 @@ func (s *Server) ensureBookContent(b *store.Book) (*store.Book, error) {
 	if !needDownload && !needParse {
 		return b, nil
 	}
+	if b.Size > maxRemoteBookBytes {
+		return nil, fmt.Errorf("WebDAV 文件超过 %d MB 上限", maxRemoteBookBytes>>20)
+	}
 
 	if needDownload {
 		client, err := webdav.New(lib.RemoteURL, lib.RemoteUser, lib.RemotePass)
 		if err != nil {
 			return nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		downloadCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
-		if err := client.Download(ctx, b.File, local); err != nil {
+		if err := client.Download(downloadCtx, b.File, local, maxRemoteBookBytes); err != nil {
 			return nil, err
 		}
 		if b.ModTime > 0 {
@@ -64,6 +87,10 @@ func (s *Server) ensureBookContent(b *store.Book) (*store.Book, error) {
 		info, err = os.Stat(local)
 		if err != nil {
 			return nil, err
+		}
+		if info.Size() > maxRemoteBookBytes {
+			_ = os.Remove(local)
+			return nil, fmt.Errorf("WebDAV 文件超过 %d MB 上限", maxRemoteBookBytes>>20)
 		}
 	}
 

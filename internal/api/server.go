@@ -100,10 +100,13 @@ type Server struct {
 	scanStatus  map[string]*ScanStatus
 	scanMu      sync.Mutex
 
-	setupMu    sync.Mutex
-	loginMu    sync.Mutex
-	loginFails map[string]*loginBucket
-	webdavMu   sync.Mutex
+	setupMu     sync.Mutex
+	loginMu     sync.Mutex
+	loginFails  map[string]*loginBucket
+	ttsMu       sync.Mutex
+	ttsUses     map[string]*loginBucket
+	webdavMu    sync.Mutex
+	webdavLocks map[string]chan struct{}
 }
 
 type loginBucket struct {
@@ -160,6 +163,8 @@ func New(st *store.Store, booksDir string, web fs.FS, opts ...Options) (*Server,
 		comicCache:    map[string]cachedComic{},
 		scanStatus:    map[string]*ScanStatus{},
 		loginFails:    map[string]*loginBucket{},
+		ttsUses:       map[string]*loginBucket{},
+		webdavLocks:   map[string]chan struct{}{},
 	}, nil
 }
 
@@ -231,7 +236,7 @@ func (s *Server) Handler() http.Handler {
 	} else {
 		fileServer := http.FileServer(http.FS(assets))
 		mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Cache-Control", "public, max-age=3600")
+			w.Header().Set("Cache-Control", "public, max-age=0, must-revalidate")
 			fileServer.ServeHTTP(w, r)
 		})))
 	}
@@ -430,6 +435,16 @@ func recoverer(next http.Handler) http.Handler {
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// extendReadDeadline / extendWriteDeadline 用于上传和大文件下载等长耗时请求，
+// 避免全局的 60s/120s 超时过早切断连接。
+func extendReadDeadline(w http.ResponseWriter, d time.Duration) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(d))
+}
+
+func extendWriteDeadline(w http.ResponseWriter, d time.Duration) {
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(d))
 }
 
 func errStatus(err error) int {

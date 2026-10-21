@@ -3,12 +3,16 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
+	"moyue/internal/epub"
+	"moyue/internal/store"
 	"moyue/internal/tts"
 )
 
@@ -17,6 +21,8 @@ const ttsSettingKey = "tts"
 const (
 	ttsMaxRunes     = 1000
 	ttsTestSentence = "你好，这是墨阅的语音朗读测试。海风吹过书页，故事从这里开始。"
+	ttsRateLimit    = 20
+	ttsRateWindow   = time.Minute
 )
 
 // ttsSettings 是保存在数据库里的语音朗读配置。API Key 只存在服务端，
@@ -263,9 +269,85 @@ func ttsSpeakable(bookType string) bool {
 	}
 }
 
+// ttsChapterText 提取当前章节的纯文本，用于限制读者只能朗读书籍正文。
+func (s *Server) ttsChapterText(b *store.Book, chapter int) (string, error) {
+	if chapter < 0 {
+		return "", fmt.Errorf("章节不存在")
+	}
+	switch b.Type {
+	case "txt":
+		tb, err := s.parseTXT(b)
+		if err != nil || chapter >= len(tb.Chapters) {
+			return "", fmt.Errorf("章节不存在")
+		}
+		ch := tb.Chapters[chapter]
+		if ch.Start < 0 || ch.End > len(tb.Text) || ch.Start >= ch.End {
+			return "", fmt.Errorf("章节不存在")
+		}
+		return ch.Title + "\n" + tb.Text[ch.Start:ch.End], nil
+	case "fb2":
+		fb, err := s.parseFB2(b)
+		if err != nil || chapter >= len(fb.Chapters) {
+			return "", fmt.Errorf("章节不存在")
+		}
+		return htmlToText(fb.Chapters[chapter].HTML), nil
+	case "mobi", "azw", "azw3", "prc":
+		_, chapters, err := s.parseKindle(b)
+		if err != nil || chapter >= len(chapters) {
+			return "", fmt.Errorf("章节不存在")
+		}
+		return htmlToText(chapters[chapter].HTML), nil
+	case "epub":
+		eb, err := s.parseEPUB(b)
+		if err != nil || chapter >= len(eb.Chapters) {
+			return "", fmt.Errorf("章节不存在")
+		}
+		ar, err := epub.OpenArchive(s.bookPath(b))
+		if err != nil {
+			return "", err
+		}
+		defer ar.Close()
+		raw, err := ar.Read(eb.Chapters[chapter].Href)
+		if err != nil {
+			return "", err
+		}
+		return htmlToText(string(raw)), nil
+	default:
+		return "", fmt.Errorf("不支持的格式")
+	}
+}
+
+func normalizeTTS(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if unicode.IsSpace(r) || r == '\u200b' || r == '\ufeff' {
+			continue
+		}
+		sb.WriteRune(r)
+	}
+	return sb.String()
+}
+
+// allowTTS 按用户做简单滑动窗口限流，避免把服务端当成通用语音接口。
+func (s *Server) allowTTS(userID string) bool {
+	s.ttsMu.Lock()
+	defer s.ttsMu.Unlock()
+	now := time.Now()
+	bucket, ok := s.ttsUses[userID]
+	if !ok || now.Sub(bucket.first) > ttsRateWindow {
+		s.ttsUses[userID] = &loginBucket{count: 1, first: now}
+		return true
+	}
+	if bucket.count >= ttsRateLimit {
+		return false
+	}
+	bucket.count++
+	return true
+}
+
 // ttsSpeak 为当前章节的一句话合成语音，结果来自服务端代理与本地缓存。
 func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
-	b, _, ok := s.loadBook(w, r)
+	b, u, ok := s.loadBook(w, r)
 	if !ok {
 		return
 	}
@@ -274,8 +356,9 @@ func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Text  string `json:"text"`
-		Voice string `json:"voice"`
+		Chapter int    `json:"chapter"`
+		Text    string `json:"text"`
+		Voice   string `json:"voice"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体格式错误")
@@ -289,7 +372,20 @@ func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
 	if utf8.RuneCountInString(text) > ttsMaxRunes {
 		text = string([]rune(text)[:ttsMaxRunes])
 	}
-
+	// 限流放在解析章节之前，避免无效文本反复触发 EPUB 解包等重操作。
+	if !s.allowTTS(u.ID) {
+		writeError(w, http.StatusTooManyRequests, "朗读请求过于频繁，请稍后再试")
+		return
+	}
+	chapterText, err := s.ttsChapterText(b, req.Chapter)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "章节不存在")
+		return
+	}
+	if !strings.Contains(normalizeTTS(chapterText), normalizeTTS(text)) {
+		writeError(w, http.StatusBadRequest, "朗读文本不属于当前章节")
+		return
+	}
 	cfg := s.loadTTSSettings()
 	if !cfg.Enabled || cfg.APIKey == "" {
 		writeError(w, http.StatusServiceUnavailable, "管理员尚未配置语音朗读")

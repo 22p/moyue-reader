@@ -59,7 +59,7 @@ func TestListAndDownload(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "sub", "b.txt")
-	if err := c.Download(context.Background(), "sub/b.txt", dst); err != nil {
+	if err := c.Download(context.Background(), "sub/b.txt", dst, 1<<20); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(dst)
@@ -68,6 +68,14 @@ func TestListAndDownload(t *testing.T) {
 	}
 	if string(data) != "text-bytes" {
 		t.Fatalf("download = %q", data)
+	}
+
+	limited := filepath.Join(t.TempDir(), "limited.txt")
+	if err := c.Download(context.Background(), "sub/b.txt", limited, 2); err == nil {
+		t.Fatal("oversized download succeeded")
+	}
+	if _, err := os.Stat(limited); !os.IsNotExist(err) {
+		t.Fatalf("oversized download left file: %v", err)
 	}
 }
 

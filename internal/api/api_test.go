@@ -256,6 +256,14 @@ func TestMultiUserLibraryFlow(t *testing.T) {
 	if got := csrfReq(ts.URL); got != http.StatusCreated {
 		t.Errorf("same-origin POST = %d, want 201", got)
 	}
+
+	// 管理员重置密码后，目标用户的旧会话必须全部失效。
+	if code, _ := admin.do("PATCH", "/api/admin/users/"+userID, map[string]any{"password": "newpass123"}); code != http.StatusOK {
+		t.Fatalf("admin password reset = %d", code)
+	}
+	if code, _ := user.do("GET", "/api/books", nil); code != http.StatusUnauthorized {
+		t.Errorf("old session after admin reset = %d, want 401", code)
+	}
 }
 
 func TestPWARoutes(t *testing.T) {

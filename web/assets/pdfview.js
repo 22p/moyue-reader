@@ -14,6 +14,17 @@
   const params = new URLSearchParams(location.search);
   const startPage = Math.max(1, parseInt(params.get('page') || '1', 10) || 1);
   const spread = params.get('spread') === '1';
+  const langParam = params.get('lang') || 'zh';
+  const lang = ['zh', 'en', 'ja', 'ko'].includes(langParam) ? langParam : 'zh';
+  const TEXT = {
+    zh: { title: 'PDF 阅读', loading: '正在加载 PDF…', loadFailed: 'PDF 加载失败', renderFailed: '页面渲染失败', unknown: '未知错误' },
+    en: { title: 'PDF reader', loading: 'Loading PDF…', loadFailed: 'Failed to load PDF', renderFailed: 'Failed to render page', unknown: 'Unknown error' },
+    ja: { title: 'PDF リーダー', loading: 'PDF を読み込み中…', loadFailed: 'PDF の読み込みに失敗しました', renderFailed: 'ページの描画に失敗しました', unknown: '不明なエラー' },
+    ko: { title: 'PDF 리더', loading: 'PDF 불러오는 중…', loadFailed: 'PDF를 불러오지 못했습니다', renderFailed: '페이지를 렌더링하지 못했습니다', unknown: '알 수 없는 오류' },
+  }[lang];
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : lang;
+  document.title = TEXT.title;
+  status.textContent = TEXT.loading;
 
   let pdf = null;
   let current = startPage;
@@ -52,7 +63,7 @@
     render(startPage);
   }).catch((err) => {
     console.error(err);
-    fail('PDF 加载失败：' + (err && err.message ? err.message : '未知错误'));
+    fail(TEXT.loadFailed + '：' + (err && err.message ? err.message : TEXT.unknown));
     post('moyue-pdf-ready', { pages: 0, error: String(err && err.message || err) });
   });
 
@@ -112,7 +123,7 @@
       post('moyue-pdf-page', { page: target, pages: total, spread: list.length > 1 });
     } catch (err) {
       console.error(err);
-      fail('页面渲染失败：' + (err && err.message ? err.message : '未知错误'));
+      fail(TEXT.renderFailed + '：' + (err && err.message ? err.message : TEXT.unknown));
     } finally {
       rendering = false;
       if (pending != null && pending !== current) {

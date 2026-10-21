@@ -78,6 +78,7 @@ func (s *Server) comicPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pdfFile(w http.ResponseWriter, r *http.Request) {
+	extendWriteDeadline(w, 30*time.Minute)
 	b, _, ok := s.loadBook(w, r)
 	if !ok {
 		return
@@ -93,6 +94,7 @@ func (s *Server) pdfFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) audioFile(w http.ResponseWriter, r *http.Request) {
+	extendWriteDeadline(w, 30*time.Minute)
 	b, _, ok := s.loadBook(w, r)
 	if !ok {
 		return
@@ -152,7 +154,7 @@ func pdfPageCount(path string) (int, error) {
 	defer f.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	n, err := api.PageCount(ctx, f, model.NewDefaultConfiguration())
+	n, err := api.PageCount(ctx, f, model.NewStatelessConfiguration())
 	if err != nil {
 		return 0, err
 	}

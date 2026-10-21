@@ -13,8 +13,10 @@ var (
 	scriptRe    = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>|<script\b[^>]*/>`)
 	eventAttrRe = regexp.MustCompile(`(?is)\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
 	jsHrefRe    = regexp.MustCompile(`(?is)\shref\s*=\s*["']\s*javascript:[^"']*["']`)
-	attrURLRe   = regexp.MustCompile(`(?is)(\s(?:src|href|poster|data-src)\s*=\s*)("([^"]*)"|'([^']*)')`)
+	attrURLRe   = regexp.MustCompile(`(?is)(\s(?:src|href|poster|data-src|xlink:href)\s*=\s*)("([^"]*)"|'([^']*)')`)
+	srcsetRe    = regexp.MustCompile(`(?is)(\s(?:srcset|imagesrcset)\s*=\s*)("([^"]*)"|'([^']*)')`)
 	cssURLRe    = regexp.MustCompile(`(?is)url\(\s*["']?([^"')]+)["']?\s*\)`)
+	cssImportRe = regexp.MustCompile(`(?is)(@import\s+)(["'])([^"']+)(["'])`)
 	headRe      = regexp.MustCompile(`(?is)<head\b[^>]*>(.*?)</head\s*>`)
 	bodyRe      = regexp.MustCompile(`(?is)<body\b[^>]*>(.*?)(?:</body\s*>|$)`)
 	titleRe     = regexp.MustCompile(`(?is)<title\b[^>]*>(.*?)</title\s*>`)
@@ -79,6 +81,8 @@ func renderChapter(bookID string, chapterIndex int, chapterHref string, raw []by
 	}
 	head = ctx.rewriteHTML(head)
 	body = ctx.rewriteHTML(body)
+	head = ctx.rewriteSrcset(head)
+	body = ctx.rewriteSrcset(body)
 
 	// 只保留样式相关的 head 内容，避免 meta refresh 等副作用
 	var kept strings.Builder
@@ -135,19 +139,49 @@ func (c *renderCtx) rewriteHTML(s string) string {
 	})
 }
 
+func (c *renderCtx) rewriteSrcset(s string) string {
+	return srcsetRe.ReplaceAllStringFunc(s, func(match string) string {
+		m := srcsetRe.FindStringSubmatch(match)
+		if len(m) != 5 {
+			return match
+		}
+		quote := `"`
+		raw := m[3]
+		if m[2][0] == '\'' {
+			quote = `'`
+			raw = m[4]
+		}
+		parts := strings.Split(raw, ",")
+		for i, part := range parts {
+			fields := strings.Fields(part)
+			if len(fields) == 0 {
+				continue
+			}
+			if !strings.HasPrefix(strings.ToLower(fields[0]), "data:") {
+				fields[0] = c.url(fields[0])
+			}
+			parts[i] = strings.Join(fields, " ")
+		}
+		return m[1] + quote + strings.Join(parts, ", ") + quote
+	})
+}
+
 func (c *renderCtx) url(raw string) string {
 	val := strings.TrimSpace(html.UnescapeString(raw))
 	if val == "" {
 		return raw
 	}
 	lower := strings.ToLower(val)
+	if strings.HasPrefix(lower, "javascript:") {
+		return "#"
+	}
 	if strings.HasPrefix(val, "#") || strings.HasPrefix(lower, "data:") ||
 		strings.HasPrefix(lower, "mailto:") || strings.HasPrefix(lower, "tel:") ||
-		strings.HasPrefix(lower, "javascript:") || strings.HasPrefix(lower, "blob:") {
-		return val
+		strings.HasPrefix(lower, "blob:") {
+		return html.EscapeString(val)
 	}
 	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(val, "//") {
-		return val
+		return html.EscapeString(val)
 	}
 
 	frag := ""
@@ -162,7 +196,7 @@ func (c *renderCtx) url(raw string) string {
 		decoded = val
 	}
 	if strings.HasPrefix(decoded, "/api/") {
-		return val
+		return html.EscapeString(val)
 	}
 	var full string
 	if strings.HasPrefix(decoded, "/") {
@@ -179,10 +213,29 @@ func (c *renderCtx) url(raw string) string {
 	case ".xhtml", ".html", ".htm":
 		return "#"
 	}
-	return "/api/books/" + c.bookID + "/resource?path=" + url.QueryEscape(full) + frag
+	return html.EscapeString("/api/books/" + c.bookID + "/resource?path=" + url.QueryEscape(full) + frag)
 }
 
 func rewriteCSS(css string, ctx *renderCtx) string {
+	css = cssImportRe.ReplaceAllStringFunc(css, func(match string) string {
+		m := cssImportRe.FindStringSubmatch(match)
+		if len(m) != 5 {
+			return match
+		}
+		raw := strings.TrimSpace(m[3])
+		lower := strings.ToLower(raw)
+		if strings.HasPrefix(lower, "data:") || strings.HasPrefix(lower, "http://") ||
+			strings.HasPrefix(lower, "https://") || strings.HasPrefix(raw, "//") {
+			return match
+		}
+		decoded, err := url.PathUnescape(raw)
+		if err != nil {
+			decoded = raw
+		}
+		full := cleanPath(path.Join(ctx.dir, decoded))
+		return m[1] + m[2] + "/api/books/" + ctx.bookID + "/resource?path=" +
+			url.QueryEscape(full) + m[4]
+	})
 	return cssURLRe.ReplaceAllStringFunc(css, func(match string) string {
 		m := cssURLRe.FindStringSubmatch(match)
 		if len(m) != 2 {

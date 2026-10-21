@@ -244,8 +244,11 @@ func (c *Client) auth(req *http.Request) {
 	}
 }
 
-// Download 把相对路径 rel 的文件下载到本地 dst。
-func (c *Client) Download(ctx context.Context, rel, dst string) error {
+// Download 把相对路径 rel 的文件下载到本地 dst，最多接受 maxBytes 字节。
+func (c *Client) Download(ctx context.Context, rel, dst string, maxBytes int64) error {
+	if maxBytes <= 0 {
+		maxBytes = 512 << 20
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.urlFor(rel).String(), nil)
 	if err != nil {
 		return err
@@ -258,6 +261,9 @@ func (c *Client) Download(ctx context.Context, rel, dst string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("下载 %s 返回 %s", rel, resp.Status)
+	}
+	if resp.ContentLength > maxBytes {
+		return fmt.Errorf("远程文件超过 %d MB 上限", maxBytes>>20)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
@@ -273,9 +279,14 @@ func (c *Client) Download(ctx context.Context, rel, dst string) error {
 			_ = os.Remove(tmpName)
 		}
 	}()
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
 		tmp.Close()
 		return err
+	}
+	if n > maxBytes {
+		tmp.Close()
+		return fmt.Errorf("远程文件超过 %d MB 上限", maxBytes>>20)
 	}
 	if err := tmp.Close(); err != nil {
 		return err

@@ -41,6 +41,9 @@ func TestTTSSettingsAndSpeak(t *testing.T) {
 	if err := os.MkdirAll(booksDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(booksDir, "a.txt"), []byte("第一章 测试\n\n你好，世界。这是测试正文。"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	st, err := store.Open(dataDir)
 	if err != nil {
 		t.Fatal(err)
@@ -120,7 +123,7 @@ func TestTTSSettingsAndSpeak(t *testing.T) {
 	}
 
 	postTTS := func() (*http.Response, []byte) {
-		raw, _ := json.Marshal(map[string]string{"text": "你好，世界。", "voice": "茉莉"})
+		raw, _ := json.Marshal(map[string]any{"chapter": 0, "text": "你好，世界。", "voice": "茉莉"})
 		req, err := http.NewRequest("POST", ts.URL+"/api/books/book-1/tts", bytes.NewReader(raw))
 		if err != nil {
 			t.Fatal(err)
@@ -151,6 +154,22 @@ func TestTTSSettingsAndSpeak(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("calls = %d", calls)
+	}
+
+	// 不能把接口当成任意文本的语音合成服务。
+	raw, _ := json.Marshal(map[string]any{"chapter": 0, "text": "这段文字不在这本书里。", "voice": "茉莉"})
+	req, _ := http.NewRequest("POST", ts.URL+"/api/books/book-1/tts", bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = admin.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("arbitrary tts text = %d, want 400", resp.StatusCode)
+	}
+	if calls != 1 {
+		t.Fatalf("arbitrary text reached upstream, calls = %d", calls)
 	}
 
 	// 未登录不能读取状态或合成。
@@ -184,4 +203,19 @@ func mustJSON(t *testing.T, v any) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+func TestTTSRateLimit(t *testing.T) {
+	s := &Server{ttsUses: map[string]*loginBucket{}}
+	for i := 0; i < ttsRateLimit; i++ {
+		if !s.allowTTS("u1") {
+			t.Fatalf("request %d unexpectedly limited", i+1)
+		}
+	}
+	if s.allowTTS("u1") {
+		t.Fatal("request over limit should be rejected")
+	}
+	if !s.allowTTS("u2") {
+		t.Fatal("rate limit should be per user")
+	}
 }

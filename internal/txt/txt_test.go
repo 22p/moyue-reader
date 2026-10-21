@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/encoding/traditionalchinese"
 )
 
 func TestSplitChineseChapters(t *testing.T) {
@@ -109,6 +110,24 @@ func TestGB18030Decode(t *testing.T) {
 	}
 	if !strings.Contains(book.Text, "山在那一边") {
 		t.Error("gb18030 decode failed")
+	}
+}
+
+func TestBig5Decode(t *testing.T) {
+	text := "第一章 山海\n\n山在那邊，海風吹過書頁。"
+	encoded, err := traditionalchinese.Big5.NewEncoder().Bytes([]byte(text))
+	if err != nil {
+		t.Fatal(err)
+	}
+	book, err := Parse(encoded, "測試.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Encoding != "big5" {
+		t.Errorf("encoding = %q, want big5", book.Encoding)
+	}
+	if !strings.Contains(book.Text, "山在那邊") {
+		t.Errorf("big5 decode failed: %q", book.Text)
 	}
 }
 

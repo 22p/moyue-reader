@@ -72,13 +72,17 @@ type Book struct {
 	AddedAt      time.Time `json:"addedAt"`
 }
 
-// Library 是一个书库目录。
+// Library 是一个书库目录，Kind 为 local 或 webdav。
 type Library struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Path      string    `json:"path"`
-	Type      string    `json:"type"` // mixed / ebook / epub / txt / comic / pdf
-	CreatedAt time.Time `json:"createdAt"`
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	Path       string    `json:"path"` // 本地目录；WebDAV 书库为下载缓存目录
+	Type       string    `json:"type"` // mixed / ebook / epub / txt / comic / pdf
+	Kind       string    `json:"kind"` // local / webdav
+	RemoteURL  string    `json:"remoteUrl,omitempty"`
+	RemoteUser string    `json:"remoteUser,omitempty"`
+	RemotePass string    `json:"-"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // User 是一个账号。阅读进度、书签与统计按 user_id 单独存表。
@@ -111,11 +115,15 @@ type Store struct {
 
 const schema = `
 CREATE TABLE IF NOT EXISTS libraries (
-    id         TEXT PRIMARY KEY,
-    name       TEXT NOT NULL COLLATE NOCASE UNIQUE,
-    path       TEXT NOT NULL,
-    type       TEXT NOT NULL DEFAULT 'mixed',
-    created_at INTEGER NOT NULL
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    path        TEXT NOT NULL,
+    type        TEXT NOT NULL DEFAULT 'mixed',
+    kind        TEXT NOT NULL DEFAULT 'local',
+    remote_url  TEXT NOT NULL DEFAULT '',
+    remote_user TEXT NOT NULL DEFAULT '',
+    remote_pass TEXT NOT NULL DEFAULT '',
+    created_at  INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -643,8 +651,8 @@ func (s *Store) DeleteSession(key string) error {
 
 // ListLibraries 返回按创建时间排序的书库。
 func (s *Store) ListLibraries() []*Library {
-	rows, err := s.db.Query(`SELECT id, name, path, type, created_at FROM libraries
-ORDER BY created_at, rowid`)
+	rows, err := s.db.Query(`SELECT id, name, path, type, kind, remote_url, remote_user, remote_pass, created_at
+FROM libraries ORDER BY created_at, rowid`)
 	if err != nil {
 		return []*Library{}
 	}
@@ -653,8 +661,12 @@ ORDER BY created_at, rowid`)
 	for rows.Next() {
 		var l Library
 		var created int64
-		if err := rows.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &created); err != nil {
+		if err := rows.Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Kind,
+			&l.RemoteURL, &l.RemoteUser, &l.RemotePass, &created); err != nil {
 			return libs
+		}
+		if l.Kind == "" {
+			l.Kind = "local"
 		}
 		l.CreatedAt = fromMS(created)
 		libs = append(libs, &l)
@@ -666,8 +678,10 @@ ORDER BY created_at, rowid`)
 func (s *Store) GetLibrary(id string) (*Library, error) {
 	var l Library
 	var created int64
-	err := s.db.QueryRow(`SELECT id, name, path, type, created_at FROM libraries WHERE id = ?`, id).
-		Scan(&l.ID, &l.Name, &l.Path, &l.Type, &created)
+	err := s.db.QueryRow(`SELECT id, name, path, type, kind, remote_url, remote_user, remote_pass, created_at
+FROM libraries WHERE id = ?`, id).
+		Scan(&l.ID, &l.Name, &l.Path, &l.Type, &l.Kind,
+			&l.RemoteURL, &l.RemoteUser, &l.RemotePass, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -675,6 +689,9 @@ func (s *Store) GetLibrary(id string) (*Library, error) {
 		return nil, err
 	}
 	l.CreatedAt = fromMS(created)
+	if l.Kind == "" {
+		l.Kind = "local"
+	}
 	return &l, nil
 }
 
@@ -686,8 +703,13 @@ func (s *Store) AddLibrary(l *Library) error {
 	if l.CreatedAt.IsZero() {
 		l.CreatedAt = time.Now()
 	}
-	_, err := s.db.Exec(`INSERT INTO libraries (id, name, path, type, created_at) VALUES (?, ?, ?, ?, ?)`,
-		l.ID, l.Name, l.Path, l.Type, toMS(l.CreatedAt))
+	if l.Kind == "" {
+		l.Kind = "local"
+	}
+	_, err := s.db.Exec(`INSERT INTO libraries
+(id, name, path, type, kind, remote_url, remote_user, remote_pass, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.ID, l.Name, l.Path, l.Type, l.Kind, l.RemoteURL, l.RemoteUser, l.RemotePass, toMS(l.CreatedAt))
 	if err != nil {
 		if isUniqueErr(err) {
 			return ErrConflict
@@ -829,6 +851,48 @@ func (s *Store) CanAccess(u *User, libraryID string) bool {
 		}
 	}
 	return false
+}
+
+// PruneBooks 删除书库中不在 keep 集合里的书籍记录，并级联清理阅读数据。
+// 返回删除的数量。
+func (s *Store) PruneBooks(libraryID string, keep map[string]bool) (int, error) {
+	rows, err := s.db.Query(`SELECT id FROM books WHERE library_id = ?`, libraryID)
+	if err != nil {
+		return 0, err
+	}
+	var stale []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		if !keep[id] {
+			stale = append(stale, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(stale) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	for _, id := range stale {
+		if _, err := tx.Exec(`DELETE FROM books WHERE id = ?`, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return len(stale), nil
 }
 
 // DeleteBook 删除书籍记录与所有用户的阅读数据。

@@ -63,7 +63,7 @@ func (s *Server) listBooks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	books := s.store.ListBooks()
+	books := s.pruneMissingLocalBooks(s.store.ListBooks())
 	progress := s.store.ProgressMap(u.ID)
 	out := make([]bookView, 0, len(books))
 	for _, b := range books {
@@ -298,19 +298,24 @@ func (s *Server) uploadTarget(libID string) (*store.Library, error) {
 		if err != nil {
 			return nil, errors.New("目标书库不存在")
 		}
+		if lib.Kind == "webdav" {
+			return nil, errors.New("WebDAV 书库请在远端添加文件后重新扫描")
+		}
 		return lib, nil
 	}
 	libs := s.store.ListLibraries()
 	abs, _ := filepath.Abs(s.booksDir)
 	for _, l := range libs {
-		if filepath.Clean(l.Path) == filepath.Clean(abs) {
+		if l.Kind != "webdav" && filepath.Clean(l.Path) == filepath.Clean(abs) {
 			return l, nil
 		}
 	}
-	if len(libs) > 0 {
-		return libs[0], nil
+	for _, l := range libs {
+		if l.Kind != "webdav" {
+			return l, nil
+		}
 	}
-	return nil, errors.New("还没有书库，请先在管理控制台创建")
+	return nil, errors.New("没有可上传的本地书库，请先在管理控制台创建本地目录")
 }
 
 func fileExists(p string) bool {
@@ -702,6 +707,11 @@ func (s *Server) loadBook(w http.ResponseWriter, r *http.Request) (*store.Book, 
 	u := currentUser(r)
 	if !s.canRead(u, b) {
 		writeError(w, http.StatusForbidden, "没有这本书的访问权限")
+		return nil, nil, false
+	}
+	b, err = s.ensureBookContent(b)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "加载书籍内容失败："+err.Error())
 		return nil, nil, false
 	}
 	return b, u, true

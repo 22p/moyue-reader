@@ -25,8 +25,6 @@
     kai: '"Kaiti SC","STKaiti","KaiTi","Noto Serif CJK SC",serif',
   };
 
-  const UI_LANGS = ['zh', 'en', 'ja', 'ko'];
-  const LANG_NAMES = { zh: '中文', en: 'English', ja: '日本語', ko: '한국어' };
   const normalizeLang = (value) => (['en', 'ja', 'ko'].includes(value) ? value : 'zh');
 
   function detectLang() {
@@ -38,7 +36,7 @@
   }
 
   const DEFAULT_PREFS = {
-    theme: 'paper', font: 'serif', size: 19, line: 1.9, measure: 760, mode: 'scroll',
+    theme: 'paper', font: 'sans', size: 19, line: 1.9, measure: 760, mode: 'scroll',
     ttsVoice: 'mimo_default', ttsRate: 1,
     lang: detectLang(),
   };
@@ -201,11 +199,15 @@
     grid: $('#bookGrid'),
     empty: $('#emptyState'),
     shelfCount: $('#shelfCount'),
+    shelfTitle: $('#shelfTitle'),
+    folderTrail: $('#folderTrail'),
     overview: $('#overview'),
     continueCard: $('#continueCard'),
     librarySwitch: $('#librarySwitch'),
 
     userMenu: $('#userMenu'),
+    userTheme: $('#userTheme'),
+    userLang: $('#userLang'),
     avatarBtn: $('#avatarBtn'),
     avatarText: $('#avatarText'),
     userPop: $('#userPop'),
@@ -220,6 +222,11 @@
     adminLibsSection: $('#adminLibsSection'),
     adminUsersSection: $('#adminUsersSection'),
     libForm: $('#libForm'),
+    libKind: $('#libKind'),
+    libPathField: $('#libPathField'),
+    libDavUrlField: $('#libDavUrlField'),
+    libDavUserField: $('#libDavUserField'),
+    libDavPassField: $('#libDavPassField'),
     libList: $('#libList'),
     refreshLibs: $('#refreshLibs'),
     userForm: $('#userForm'),
@@ -280,7 +287,6 @@
     modeSeg: $('#modeSeg'),
     fontSeg: $('#fontSeg'),
     langSeg: $('#langSeg'),
-    langEntry: $('#langEntry'),
     sizeRange: $('#sizeRange'),
     sizeVal: $('#sizeVal'),
     sizeUp: $('#sizeUp'),
@@ -339,6 +345,7 @@
     books: [],
     stats: null,
     selectedLibrary: 'all',
+    folder: '',
     query: '',
     sort: 'recent',
     current: null,
@@ -347,6 +354,7 @@
     percent: 0,
     pendingFraction: 0,
     saveTimer: 0,
+    frameFadeTimer: 0,
     heartbeat: 0,
     activeSeconds: 0,
     lastTick: 0,
@@ -458,6 +466,9 @@
 
     state.view = 'auth';
     state.authMode = mode;
+    state.folder = '';
+    state.query = '';
+    el.search.value = '';
     document.body.classList.remove('reading');
     el.authView.hidden = false;
     el.library.hidden = true;
@@ -540,6 +551,9 @@
     state.books = [];
     state.libraries = [];
     state.current = null;
+    state.folder = '';
+    state.query = '';
+    el.search.value = '';
     el.userPop.hidden = true;
     history.replaceState(null, '', '/');
     showAuth('login');
@@ -573,6 +587,18 @@
       state.stats = stats;
       if (state.selectedLibrary !== 'all' && !state.libraries.some((l) => l.id === state.selectedLibrary)) {
         state.selectedLibrary = 'all';
+        state.folder = '';
+      }
+      if (state.folder) {
+        const scope = state.selectedLibrary === 'all'
+          ? state.books
+          : state.books.filter((b) => b.libraryId === state.selectedLibrary);
+        const prefix = state.folder + '/';
+        const exists = scope.some((b) => {
+          const dir = bookFolder(b.file);
+          return dir === state.folder || dir.startsWith(prefix);
+        });
+        if (!exists) state.folder = '';
       }
       renderLibrarySwitch();
       renderStats();
@@ -634,6 +660,83 @@
     return state.books.filter((b) => b.libraryId === state.selectedLibrary);
   }
 
+  // 书库内的相对路径去掉文件名，得到所在文件夹；根目录返回空串。
+  function bookFolder(file) {
+    const parts = String(file || '').split('/');
+    parts.pop();
+    return parts.filter(Boolean).join('/');
+  }
+
+  // 把当前书库（或当前文件夹）的直接子文件夹和直属书籍分开。
+  function folderShelf() {
+    const current = state.folder;
+    const prefix = current ? current + '/' : '';
+    const folders = new Map();
+    const direct = [];
+    for (const b of libraryBooks()) {
+      const path = bookFolder(b.file);
+      if (path === current) {
+        direct.push(b);
+        continue;
+      }
+      if (current) {
+        if (!path.startsWith(prefix)) continue;
+        const name = path.slice(prefix.length).split('/')[0];
+        if (!name) continue;
+        const key = prefix + name;
+        const entry = folders.get(key) || { path: key, name, count: 0 };
+        entry.count += 1;
+        folders.set(key, entry);
+      } else {
+        const name = path.split('/')[0];
+        if (!name) continue;
+        const entry = folders.get(name) || { path: name, name, count: 0 };
+        entry.count += 1;
+        folders.set(name, entry);
+      }
+    }
+    return {
+      folders: Array.from(folders.values())
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN')),
+      books: direct,
+    };
+  }
+
+  function openFolder(path) {
+    state.folder = path || '';
+    state.query = '';
+    el.search.value = '';
+    closeMenus();
+    renderShelf();
+    const shelf = el.grid.closest('.shelf');
+    if (shelf) shelf.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderFolderTrail() {
+    const q = state.query.trim();
+    if (!state.folder || q) {
+      el.folderTrail.hidden = true;
+      el.folderTrail.innerHTML = '';
+      return;
+    }
+    const lib = state.libraries.find((l) => l.id === state.selectedLibrary);
+    const rootName = state.selectedLibrary === 'all' ? tr('全部书库') : (lib?.name || tr('书库'));
+    const items = [`<button type="button" data-folder-nav="">${esc(rootName)}</button>`];
+    let acc = '';
+    const parts = state.folder.split('/').filter(Boolean);
+    parts.forEach((part, i) => {
+      acc = acc ? `${acc}/${part}` : part;
+      items.push('<span class="folder-sep">/</span>');
+      if (i === parts.length - 1) {
+        items.push(`<span class="folder-current">${esc(part)}</span>`);
+      } else {
+        items.push(`<button type="button" data-folder-nav="${esc(acc)}">${esc(part)}</button>`);
+      }
+    });
+    el.folderTrail.innerHTML = items.join('');
+    el.folderTrail.hidden = false;
+  }
+
   function renderContinue() {
     const book = libraryBooks()
       .filter((b) => b.progress && b.progress.updatedAt && !b.progress.finished
@@ -690,12 +793,90 @@
     return kind ? `${kind} · 尚未开始` : '尚未开始';
   }
 
+  function bookCard(b, i) {
+    const p = b.progress || {};
+    const percent = clamp(p.percent || 0, 0, 100);
+    const badge = p.finished ? '<span class="badge">已读完</span>' : '';
+    const typeTag = typeLabel(b.type) ? `<span class="badge badge-type">${typeLabel(b.type)}</span>` : '';
+    const bar = p.updatedAt && !p.finished
+      ? `<div class="cover-progress"><i style="width:${percent}%"></i></div>` : '';
+    const stateCls = p.updatedAt ? '' : ' is-new';
+    const lib = state.libraries.find((l) => l.id === b.libraryId);
+    const libName = state.libraries.length > 1 ? (lib?.name || '') : '';
+    const unit = b.type === 'audio' ? '段'
+      : b.type === 'pdf' || b.type === 'cbz' || b.type === 'cbr' ? '页' : '节';
+    const pending = lib?.kind === 'webdav' && !b.chapterCount;
+    const detail = pending
+      ? (b.size > 0 ? `WebDAV · ${fmtBytes(b.size)}` : 'WebDAV')
+      : `${b.chapterCount || 0} ${unit}`;
+    const bits = [b.creator || '佚名', detail];
+    if (libName) bits.push(libName);
+    if (state.query.trim()) {
+      const dir = bookFolder(b.file);
+      if (dir) bits.push(dir);
+    }
+    return `
+      <article class="book" data-id="${b.id}" style="--d:${Math.min(i * 26, 260)}ms">
+        <div class="cover" data-open="${b.id}" role="button" tabindex="0" aria-label="打开《${esc(b.title)}》">
+          ${coverMarkup(b)}
+          ${bar}
+          ${badge}${typeTag}
+          <button class="card-menu" data-menu="${b.id}" aria-label="更多操作" aria-haspopup="true">
+            <svg class="icon"><use href="#i-more"/></svg>
+          </button>
+        </div>
+        <div class="book-menu" data-menu-panel="${b.id}">
+          <button data-act="open" data-id="${b.id}"><svg class="icon"><use href="#i-book"/></svg>开始阅读</button>
+          <button data-act="reset" data-id="${b.id}"><svg class="icon"><use href="#i-rotate"/></svg>标记未读</button>
+          <button data-act="download" data-id="${b.id}"><svg class="icon"><use href="#i-download"/></svg>下载文件</button>
+          ${state.user && state.user.isAdmin ? `<button data-act="delete" data-id="${b.id}" class="is-danger"><svg class="icon"><use href="#i-trash"/></svg>删除</button>` : ''}
+        </div>
+        <div class="book-meta">
+          <h3 title="${esc(b.title)}">${esc(b.title)}</h3>
+          <p>${esc(bits.join(' · '))}</p>
+          <div class="book-state${stateCls}">${esc(bookStateText(b))}</div>
+        </div>
+      </article>`;
+  }
+
+  function countBooks(n) {
+    if (prefs.lang === 'en') return `${n} book${n === 1 ? '' : 's'}`;
+    return tr(`${n} 本`);
+  }
+
+  function countFound(n) {
+    if (prefs.lang === 'en') return `Found ${n} book${n === 1 ? '' : 's'}`;
+    return tr(`找到 ${n} 本`);
+  }
+
+  function folderCard(f, i) {
+    const count = countBooks(f.count);
+    return `
+      <article class="book folder-card" data-folder="${esc(f.path)}" style="--d:${Math.min(i * 26, 260)}ms">
+        <div class="cover folder-cover" role="button" tabindex="0" aria-label="${esc(tr('文件夹'))} ${esc(f.name)}">
+          <svg class="icon folder-icon"><use href="#i-folder"/></svg>
+          <span class="folder-count">${esc(count)}</span>
+        </div>
+        <div class="book-meta">
+          <h3 title="${esc(f.name)}">${esc(f.name)}</h3>
+          <p>${esc(tr('文件夹'))} · ${esc(count)}</p>
+        </div>
+      </article>`;
+  }
+
   function renderShelf() {
     const q = state.query.trim().toLowerCase();
-    let books = libraryBooks().filter((b) => {
-      if (!q) return true;
-      return (b.title || '').toLowerCase().includes(q) || (b.creator || '').toLowerCase().includes(q);
-    });
+    const all = libraryBooks();
+    let folders = [];
+    let books;
+    if (q) {
+      books = all.filter((b) =>
+        (b.title || '').toLowerCase().includes(q) || (b.creator || '').toLowerCase().includes(q));
+    } else {
+      const shelf = folderShelf();
+      folders = shelf.folders;
+      books = shelf.books;
+    }
 
     const sorters = {
       recent: (a, b) => new Date(b.progress?.updatedAt || b.addedAt) - new Date(a.progress?.updatedAt || a.addedAt),
@@ -704,67 +885,50 @@
     };
     books.sort(sorters[state.sort] || sorters.recent);
 
-    el.shelfCount.textContent = q ? `找到 ${books.length} 本` : `${libraryBooks().length} 本`;
-    el.grid.hidden = books.length === 0;
-    el.empty.hidden = books.length !== 0;
+    const total = folders.reduce((n, f) => n + f.count, 0) + books.length;
+    el.shelfCount.textContent = q ? countFound(books.length) : countBooks(total);
+    el.shelfTitle.textContent = state.folder
+      ? state.folder.split('/').filter(Boolean).pop()
+      : tr('我的书架');
+    renderFolderTrail();
 
-    if (books.length === 0) {
+    const itemCount = folders.length + books.length;
+    el.grid.hidden = itemCount === 0;
+    el.empty.hidden = itemCount !== 0;
+
+    if (itemCount === 0) {
       const heading = el.empty.querySelector('h3');
       const desc = el.empty.querySelector('p');
-      if (state.books.length === 0) {
+      const inFolder = !!state.folder;
+      const canUpload = !!(state.user && state.user.isAdmin);
+      el.emptyUpload.hidden = inFolder || !canUpload || state.libraries.length === 0;
+      el.emptyHint.hidden = inFolder || !canUpload || state.libraries.length === 0;
+      if (inFolder) {
+        heading.textContent = tr('这个文件夹是空的');
+        desc.textContent = tr('返回上一级继续浏览。');
+      } else if (state.books.length === 0) {
         if (state.user && state.user.isAdmin && state.libraries.length > 0) {
-          heading.textContent = '书架还空着';
-          desc.textContent = '把 EPUB 或 TXT 文件拖进窗口，或者点击下面按钮开始。';
+          heading.textContent = tr('书架还空着');
+          desc.textContent = tr('把 EPUB 或 TXT 文件拖进窗口，或者点击下面按钮开始。');
         } else if (state.user && state.user.isAdmin) {
-          heading.textContent = '还没有书库';
-          desc.textContent = '先到管理控制台添加一个服务器目录，再导入书籍。';
+          heading.textContent = tr('还没有书库');
+          desc.textContent = tr('先到管理控制台添加一个服务器目录，再导入书籍。');
         } else {
-          heading.textContent = '等待管理员分配书籍';
-          desc.textContent = '你的账号还没有可访问的书库，请联系管理员授权。';
+          heading.textContent = tr('等待管理员分配书籍');
+          desc.textContent = tr('你的账号还没有可访问的书库，请联系管理员授权。');
         }
       } else if (q) {
-        heading.textContent = '没有匹配的书';
-        desc.textContent = '换一个关键词试试，或者清空搜索框。';
+        heading.textContent = tr('没有匹配的书');
+        desc.textContent = tr('换一个关键词试试，或者清空搜索框。');
       } else {
-        heading.textContent = '这个书库还没有书';
-        desc.textContent = '切换其他书库，或让管理员扫描目录。';
+        heading.textContent = tr('这个书库还没有书');
+        desc.textContent = tr('切换其他书库，或让管理员扫描目录。');
       }
     }
 
-    el.grid.innerHTML = books.map((b, i) => {
-      const p = b.progress || {};
-      const percent = clamp(p.percent || 0, 0, 100);
-      const badge = p.finished ? '<span class="badge">已读完</span>' : '';
-      const typeTag = typeLabel(b.type) ? `<span class="badge badge-type">${typeLabel(b.type)}</span>` : '';
-      const bar = p.updatedAt && !p.finished
-        ? `<div class="cover-progress"><i style="width:${percent}%"></i></div>` : '';
-      const stateCls = p.updatedAt ? '' : ' is-new';
-      const libName = state.libraries.length > 1
-        ? (state.libraries.find((l) => l.id === b.libraryId)?.name || '')
-        : '';
-      return `
-        <article class="book" data-id="${b.id}" style="--d:${Math.min(i * 26, 260)}ms">
-          <div class="cover" data-open="${b.id}" role="button" tabindex="0" aria-label="打开《${esc(b.title)}》">
-            ${coverMarkup(b)}
-            ${bar}
-            ${badge}${typeTag}
-            <button class="card-menu" data-menu="${b.id}" aria-label="更多操作" aria-haspopup="true">
-              <svg class="icon"><use href="#i-more"/></svg>
-            </button>
-          </div>
-          <div class="book-menu" data-menu-panel="${b.id}">
-            <button data-act="open" data-id="${b.id}"><svg class="icon"><use href="#i-book"/></svg>开始阅读</button>
-            <button data-act="reset" data-id="${b.id}"><svg class="icon"><use href="#i-rotate"/></svg>标记未读</button>
-            <button data-act="download" data-id="${b.id}"><svg class="icon"><use href="#i-download"/></svg>下载文件</button>
-            ${state.user && state.user.isAdmin ? `<button data-act="delete" data-id="${b.id}" class="is-danger"><svg class="icon"><use href="#i-trash"/></svg>删除</button>` : ''}
-          </div>
-          <div class="book-meta">
-            <h3 title="${esc(b.title)}">${esc(b.title)}</h3>
-            <p>${esc(b.creator || '佚名')} · ${b.chapterCount || 0} ${b.type === 'audio' ? '段' : b.type === 'pdf' || b.type === 'cbz' || b.type === 'cbr' ? '页' : '节'}${libName ? ' · ' + esc(libName) : ''}</p>
-            <div class="book-state${stateCls}">${esc(bookStateText(b))}</div>
-          </div>
-        </article>`;
-    }).join('');
+    el.grid.innerHTML =
+      folders.map((f, i) => folderCard(f, i)).join('') +
+      books.map((b, i) => bookCard(b, folders.length + i)).join('');
   }
 
   /* ============================ 管理台 ============================ */
@@ -849,6 +1013,7 @@
     const parts = [];
     if (scan.lastScan) parts.push(`上次扫描 ${relativeTime(scan.lastScan)}`);
     parts.push(`新增 ${scan.added || 0} · 更新 ${scan.updated || 0} · 跳过 ${scan.skipped || 0}`);
+    if (scan.removed) parts.push(tr(`移除 ${scan.removed}`));
     if (scan.failed) parts.push(`失败 ${scan.failed}`);
     return esc(parts.join(' · '));
   }
@@ -861,16 +1026,19 @@
   }
 
   function renderAdminLibraries() {
-    el.libList.innerHTML = state.admin.libraries.map((l) => `
+    el.libList.innerHTML = state.admin.libraries.map((l) => {
+      const dav = l.kind === 'webdav';
+      return `
       <div class="admin-item" data-lib-row="${l.id}">
         <div class="admin-item-main">
           <div class="admin-item-title">
             ${esc(l.name)}
+            ${dav ? '<span class="tag">WebDAV</span>' : ''}
             <span class="tag">${libTypeLabel(l.type)}</span>
             <span class="tag tag-accent">${l.bookCount || 0} 本</span>
             ${l.scan && l.scan.error ? '<span class="tag tag-bad">扫描有错误</span>' : ''}
           </div>
-          <div class="admin-item-sub">${esc(l.path || '')}</div>
+          <div class="admin-item-sub">${esc(dav ? (l.url || '') : (l.path || ''))}</div>
           <div class="scan-line" title="${esc(l.scan?.error || '')}">${scanText(l.scan)}</div>
         </div>
         <div class="admin-item-actions">
@@ -879,7 +1047,8 @@
           </button>
           <button class="btn btn-ghost btn-sm" data-lib-act="delete" data-id="${l.id}">删除</button>
         </div>
-      </div>`).join('') || '<div class="empty-list">还没有书库，先在上方添加一个服务器目录。</div>';
+      </div>`;
+    }).join('') || '<div class="empty-list">还没有书库，先在上方添加一个服务器目录。</div>';
   }
 
   function renderLibraryChecks() {
@@ -1616,14 +1785,7 @@
         b.classList.toggle('is-active', b.dataset.lang === lang));
     }
     if (el.authLang) el.authLang.value = lang;
-  }
-
-  function toggleLang() {
-    const index = UI_LANGS.indexOf(normalizeLang(prefs.lang));
-    prefs.lang = UI_LANGS[(index + 1) % UI_LANGS.length];
-    savePrefs();
-    applyLang();
-    toast(`Language: ${LANG_NAMES[prefs.lang]}`);
+    if (el.userLang) el.userLang.value = lang;
   }
 
   function applyAppTheme() {
@@ -1705,6 +1867,7 @@
   }
 
   function syncSettingsUI() {
+    if (el.userTheme) el.userTheme.value = prefs.theme;
     $$('.theme-chip', el.themeGrid).forEach((c) => c.classList.toggle('is-active', c.dataset.theme === prefs.theme));
     $$('button', el.fontSeg).forEach((b) => b.classList.toggle('is-active', b.dataset.font === prefs.font));
     $$('button', el.modeSeg).forEach((b) => b.classList.toggle('is-active', b.dataset.mode === prefs.mode));
@@ -1762,12 +1925,15 @@
     el.prevBtn.title = prevLabel;
     el.nextBtn.title = nextLabel;
     const step = chapterStep();
+    const finished = !!(book.progress && book.progress.finished);
+    const atEnd = paged
+      ? state.chapter >= total - 1 && state.page.page >= state.page.pages - 1
+      : state.chapter + step > total - 1;
+    const canFinish = atEnd && (paged || fixed || state.fraction >= 0.985);
     el.prevBtn.disabled = paged
       ? state.chapter <= 0 && state.page.page === 0
       : state.chapter <= 0;
-    el.nextBtn.disabled = paged
-      ? state.chapter >= total - 1 && state.page.page >= state.page.pages - 1
-      : state.chapter + step > total - 1;
+    el.nextBtn.disabled = atEnd && (!canFinish || finished);
     updateTOCActive();
   }
 
@@ -1788,6 +1954,18 @@
     el.nextHint.classList.toggle('is-visible', !isPaginated() && !isFixed(state.current) && !isAudio(state.current)
       && state.fraction > 0.965 && state.chapter < total - 1);
     updateBookmarkState();
+  }
+
+  function fadeFrameOut() {
+    el.frame.classList.add('is-swapping');
+    clearTimeout(state.frameFadeTimer);
+    // 加载失败或文档为空时也要恢复，避免一直看不见。
+    state.frameFadeTimer = setTimeout(fadeFrameIn, 2500);
+  }
+
+  function fadeFrameIn() {
+    clearTimeout(state.frameFadeTimer);
+    el.frame.classList.remove('is-swapping');
   }
 
   async function loadChapter(index, fraction = 0) {
@@ -1816,6 +1994,7 @@
           start: String(state.fraction),
           lang: prefs.lang || 'zh',
         });
+        fadeFrameOut();
         el.frame.src = `/api/books/${book.id}/audioview?${q.toString()}`;
       }
       scheduleSave();
@@ -1833,6 +2012,7 @@
         el.frame.contentWindow.postMessage({ type: 'moyue-pdf-go', page: index + 1 }, '*');
       } else if (!state.pdf.loading) {
         state.pdf.loading = true;
+        fadeFrameOut();
         el.frame.src = `/api/books/${book.id}/pdfview?page=${index + 1}${wantSpread ? '&spread=1' : ''}`;
       }
       scheduleSave();
@@ -1841,11 +2021,13 @@
 
     if (isFixed(book)) {
       state.comicSpread = prefs.mode === 'spread' && isSpreadWide();
+      fadeFrameOut();
       el.frame.src = `/api/books/${book.id}/chapter/${index}${state.comicSpread ? '?spread=1' : ''}`;
       scheduleSave();
       return;
     }
 
+    fadeFrameOut();
     el.frame.src = `/api/books/${book.id}/chapter/${index}`;
     scheduleSave();
   }
@@ -2233,22 +2415,28 @@
       postAudioTheme();
       updateChrome();
       updateProgressUI();
+      fadeFrameIn();
       return;
     }
     if (book.type === 'pdf') {
       postPDFTheme();
       updateChrome();
       updateProgressUI();
+      fadeFrameIn();
       return;
     }
 
     const doc = el.frame.contentDocument;
-    if (!doc || !doc.body || !doc.body.innerHTML.trim()) return;
+    if (!doc || !doc.body || !doc.body.innerHTML.trim()) {
+      fadeFrameIn();
+      return;
+    }
 
     if (isFixed(book)) {
       bindComicFrame(doc);
       updateChrome();
       updateProgressUI();
+      fadeFrameIn();
       return;
     }
 
@@ -2267,6 +2455,7 @@
       setTimeout(() => restoreScroll(fraction), 180);
       setTimeout(() => restoreScroll(fraction), 500);
     }
+    fadeFrameIn();
     updateChrome();
     updateProgressUI();
 
@@ -2403,6 +2592,7 @@
     state.loading = true;
     closeMenus();
     closeDrawers();
+    el.dropOverlay.hidden = true;
     try {
       const detail = await api.detail(id);
       if (!detail.chapters || detail.chapters.length === 0) throw new Error('这本书没有可阅读的章节');
@@ -2465,6 +2655,7 @@
 
   function exitReader({ updateHistory = true } = {}) {
     if (state.view !== 'reader') return;
+    fadeFrameIn();
     stopTTS();
     saveProgress();
     flushProgress();
@@ -2479,12 +2670,53 @@
     enterLibrary({ updateHistory: false });
   }
 
+  async function markFinished() {
+    const book = state.current;
+    if (!book || !book.chapters.length) return;
+    const last = book.chapters.length - 1;
+    state.chapter = last;
+    state.fraction = 1;
+
+    const cached = state.books.find((b) => b.id === book.id);
+    const optimistic = {
+      ...(book.progress || {}),
+      chapter: last,
+      chapterPercent: 1,
+      percent: 100,
+      finished: true,
+      updatedAt: new Date().toISOString(),
+    };
+    book.progress = optimistic;
+    if (cached) cached.progress = { ...(cached.progress || {}), ...optimistic };
+    updateChrome();
+    updateProgressUI();
+
+    try {
+      const progress = await api.progress(book.id, { chapter: last, chapterPercent: 1 });
+      book.progress = progress;
+      if (cached) cached.progress = progress;
+      state.lastSaved = `${last}:1.0000`;
+    } catch {
+      state.lastSaved = '';
+    }
+    toast(tr('已读完'));
+  }
+
   function nextChapter() {
     const book = state.current;
     if (!book) return;
     const step = chapterStep();
     if (state.chapter + step > book.chapters.length - 1) {
-      toast(isFixed(book) ? '已经是最后一页了' : '已经是最后一节了');
+      if (book.progress?.finished && state.fraction >= 1) {
+        toast(tr('已读完'));
+        return;
+      }
+      const atContentEnd = isPaginated() || isFixed(book) || state.fraction >= 0.985;
+      if (!atContentEnd) {
+        toast(isFixed(book) ? '已经是最后一页了' : '已经是最后一节了');
+        return;
+      }
+      markFinished();
       return;
     }
     loadChapter(state.chapter + step, 0);
@@ -3267,7 +3499,7 @@
   }
 
   function fillUploadLibraries() {
-    const libs = state.libraries || [];
+    const libs = (state.libraries || []).filter((l) => l.kind !== 'webdav');
     const current = state.selectedLibrary !== 'all' && libs.some((l) => l.id === state.selectedLibrary)
       ? state.selectedLibrary
       : (libs[0]?.id || '');
@@ -3644,6 +3876,7 @@
     const chip = e.target.closest('[data-lib]');
     if (!chip) return;
     state.selectedLibrary = chip.dataset.lib;
+    state.folder = '';
     renderLibrarySwitch();
     renderContinue();
     renderShelf();
@@ -3679,7 +3912,11 @@
   });
   el.uploadStart.addEventListener('click', startUploads);
 
+  let dragDepth = 0;
+  let internalDrag = false;
+
   el.uploadScrim.addEventListener('dragover', (e) => {
+    if (internalDrag) return;
     e.preventDefault();
     el.uploadDrop.classList.add('is-over');
   });
@@ -3690,7 +3927,14 @@
     e.preventDefault();
     e.stopPropagation();
     el.uploadDrop.classList.remove('is-over');
+    if (internalDrag) { internalDrag = false; return; }
     if (!state.upload.running) addUploadFiles(e.dataTransfer.files);
+  });
+
+  el.folderTrail.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-folder-nav]');
+    if (!btn) return;
+    openFolder(btn.dataset.folderNav || '');
   });
 
   el.search.addEventListener('input', () => {
@@ -3704,6 +3948,12 @@
   });
 
   el.grid.addEventListener('click', async (e) => {
+    const folder = e.target.closest('[data-folder]');
+    if (folder) {
+      openFolder(folder.dataset.folder);
+      return;
+    }
+
     const menuBtn = e.target.closest('[data-menu]');
     if (menuBtn) {
       e.stopPropagation();
@@ -3767,6 +4017,12 @@
 
   el.grid.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
+    const folder = e.target.closest('[data-folder]');
+    if (folder) {
+      e.preventDefault();
+      openFolder(folder.dataset.folder);
+      return;
+    }
     const opener = e.target.closest('[data-open]');
     if (!opener) return;
     e.preventDefault();
@@ -3793,6 +4049,17 @@
     el.avatarBtn.setAttribute('aria-expanded', String(open));
   });
 
+  el.userTheme.addEventListener('change', () => {
+    prefs.theme = el.userTheme.value;
+    applyPrefs();
+  });
+
+  el.userLang.addEventListener('change', () => {
+    prefs.lang = normalizeLang(el.userLang.value);
+    savePrefs();
+    applyLang();
+  });
+
   el.userPop.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-user-act]');
     if (!btn) return;
@@ -3805,8 +4072,6 @@
       openAdmin();
     } else if (act === 'sessions') {
       openSessions();
-    } else if (act === 'lang') {
-      toggleLang();
     } else if (act === 'install') {
       installApp();
     } else if (act === 'password') {
@@ -3858,18 +4123,39 @@
     });
   });
 
+  function syncLibKindFields() {
+    if (!el.libKind) return;
+    const dav = el.libKind.value === 'webdav';
+    el.libPathField.hidden = dav;
+    el.libDavUrlField.hidden = !dav;
+    el.libDavUserField.hidden = !dav;
+    el.libDavPassField.hidden = !dav;
+    const pathInput = el.libPathField.querySelector('input');
+    const urlInput = el.libDavUrlField.querySelector('input');
+    if (pathInput) pathInput.required = !dav;
+    if (urlInput) urlInput.required = dav;
+  }
+
+  el.libKind.addEventListener('change', syncLibKindFields);
+
   el.libForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const fd = new FormData(el.libForm);
+    const kind = String(fd.get('kind') || 'local');
     const btn = el.libForm.querySelector('button[type="submit"]');
     btn.disabled = true;
     try {
       await api.createLibrary({
         name: String(fd.get('name') || '').trim(),
-        path: String(fd.get('path') || '').trim(),
+        kind,
+        path: kind === 'local' ? String(fd.get('path') || '').trim() : '',
         type: String(fd.get('type') || 'mixed'),
+        url: kind === 'webdav' ? String(fd.get('url') || '').trim() : '',
+        username: kind === 'webdav' ? String(fd.get('username') || '').trim() : '',
+        password: kind === 'webdav' ? String(fd.get('password') || '') : '',
       });
       el.libForm.reset();
+      syncLibKindFields();
       toast('书库已添加，正在扫描');
       await loadAdmin();
     } catch (err) {
@@ -4143,16 +4429,33 @@
   });
 
   /* 拖拽导入 */
-  let dragDepth = 0;
+  // 页面内拖动图片、封面或选中文字时，浏览器也会在 dataTransfer 里带上 Files。
+  // 只有从系统拖入文件，并且停留在书架或管理台时才接收，避免阅读时误弹上传框。
+  function canAcceptFileDrop(e) {
+    if (internalDrag) return false;
+    if (!state.user?.isAdmin) return false;
+    if (state.view !== 'library' && state.view !== 'admin') return false;
+    if (!el.uploadScrim.hidden) return false;
+    if (!e.dataTransfer) return false;
+    return Array.from(e.dataTransfer.types || []).includes('Files');
+  }
+
+  window.addEventListener('dragstart', () => { internalDrag = true; }, true);
+  window.addEventListener('dragend', () => {
+    internalDrag = false;
+    dragDepth = 0;
+    el.dropOverlay.hidden = true;
+  }, true);
+
   window.addEventListener('dragenter', (e) => {
-    if (!state.user?.isAdmin) return;
-    if (!el.uploadScrim.hidden) return;
-    if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+    if (!canAcceptFileDrop(e)) return;
     dragDepth++;
     el.dropOverlay.hidden = false;
   });
   window.addEventListener('dragover', (e) => {
-    if (!el.dropOverlay.hidden) e.preventDefault();
+    if (el.dropOverlay.hidden) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   });
   window.addEventListener('dragleave', () => {
     dragDepth = Math.max(0, dragDepth - 1);
@@ -4163,7 +4466,8 @@
     e.preventDefault();
     dragDepth = 0;
     el.dropOverlay.hidden = true;
-    openUploadDialog(e.dataTransfer.files);
+    if (!internalDrag) openUploadDialog(e.dataTransfer.files);
+    internalDrag = false;
   });
 
   /* 图片加载失败时隐藏，露出文字封面 */

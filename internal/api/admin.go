@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,21 +17,35 @@ type libraryView struct {
 	Name      string     `json:"name"`
 	Path      string     `json:"path,omitempty"`
 	Type      string     `json:"type"`
+	Kind      string     `json:"kind"`
+	URL       string     `json:"url,omitempty"`
+	Username  string     `json:"username,omitempty"`
 	BookCount int        `json:"bookCount"`
 	Scan      ScanStatus `json:"scan"`
 	CreatedAt time.Time  `json:"createdAt"`
 }
 
 func (s *Server) libraryView(l *store.Library) libraryView {
-	return libraryView{
+	kind := l.Kind
+	if kind == "" {
+		kind = "local"
+	}
+	v := libraryView{
 		ID:        l.ID,
 		Name:      l.Name,
-		Path:      l.Path,
 		Type:      l.Type,
+		Kind:      kind,
 		BookCount: s.store.BookCount(l.ID),
 		Scan:      s.scanSnapshot(l.ID),
 		CreatedAt: l.CreatedAt,
 	}
+	if kind == "webdav" {
+		v.URL = l.RemoteURL
+		v.Username = l.RemoteUser
+	} else {
+		v.Path = l.Path
+	}
+	return v
 }
 
 // listLibraries 返回当前用户可访问的书库（不含服务器路径）。
@@ -41,10 +56,15 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 		if !s.store.CanAccess(u, l.ID) {
 			continue
 		}
+		kind := l.Kind
+		if kind == "" {
+			kind = "local"
+		}
 		out = append(out, libraryView{
 			ID:        l.ID,
 			Name:      l.Name,
 			Type:      l.Type,
+			Kind:      kind,
 			BookCount: s.store.BookCount(l.ID),
 			CreatedAt: l.CreatedAt,
 		})
@@ -63,9 +83,13 @@ func (s *Server) adminLibraries(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
-		Type string `json:"type"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		Type     string `json:"type"`
+		Kind     string `json:"kind"`
+		URL      string `json:"url"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "请求体格式错误")
@@ -74,8 +98,12 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Path = strings.TrimSpace(req.Path)
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
+	req.Kind = strings.ToLower(strings.TrimSpace(req.Kind))
 	if req.Type == "" {
 		req.Type = "mixed"
+	}
+	if req.Kind == "" {
+		req.Kind = "local"
 	}
 	if req.Name == "" || len([]rune(req.Name)) > 40 {
 		writeError(w, http.StatusBadRequest, "书库名称不能为空且不超过 40 个字符")
@@ -87,28 +115,69 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "书库类型不受支持")
 		return
 	}
-	if req.Path == "" {
-		writeError(w, http.StatusBadRequest, "请填写服务器上的目录路径")
-		return
-	}
-	abs, err := filepath.Abs(req.Path)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "目录路径无效")
-		return
-	}
-	info, err := os.Stat(abs)
-	if err != nil || !info.IsDir() {
-		writeError(w, http.StatusBadRequest, "目录不存在或不是文件夹："+abs)
-		return
-	}
-	for _, l := range s.store.ListLibraries() {
-		if strings.EqualFold(filepath.Clean(l.Path), filepath.Clean(abs)) {
-			writeError(w, http.StatusConflict, "该目录已经被书库「"+l.Name+"」使用")
+	var lib *store.Library
+	switch req.Kind {
+	case "webdav":
+		raw := strings.TrimRight(strings.TrimSpace(req.URL), "/")
+		if raw == "" {
+			writeError(w, http.StatusBadRequest, "请填写 WebDAV 地址")
 			return
 		}
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			writeError(w, http.StatusBadRequest, "WebDAV 地址必须以 http:// 或 https:// 开头")
+			return
+		}
+		if u.User != nil {
+			writeError(w, http.StatusBadRequest, "请把用户名和密码填在单独字段中")
+			return
+		}
+		for _, l := range s.store.ListLibraries() {
+			if l.Kind == "webdav" && strings.EqualFold(strings.TrimRight(l.RemoteURL, "/"), raw) {
+				writeError(w, http.StatusConflict, "该 WebDAV 地址已经被书库「"+l.Name+"」使用")
+				return
+			}
+		}
+		cache := filepath.Join(filepath.Dir(s.store.Path()), "webdav", store.BookID("webdav", raw))
+		if err := os.MkdirAll(cache, 0o755); err != nil {
+			writeError(w, http.StatusInternalServerError, "创建 WebDAV 缓存目录失败")
+			return
+		}
+		lib = &store.Library{
+			Name:       req.Name,
+			Path:       cache,
+			Type:       req.Type,
+			Kind:       "webdav",
+			RemoteURL:  raw,
+			RemoteUser: strings.TrimSpace(req.Username),
+			RemotePass: req.Password,
+		}
+	case "local":
+		if req.Path == "" {
+			writeError(w, http.StatusBadRequest, "请填写服务器上的目录路径")
+			return
+		}
+		abs, err := filepath.Abs(req.Path)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "目录路径无效")
+			return
+		}
+		info, err := os.Stat(abs)
+		if err != nil || !info.IsDir() {
+			writeError(w, http.StatusBadRequest, "目录不存在或不是文件夹："+abs)
+			return
+		}
+		for _, l := range s.store.ListLibraries() {
+			if l.Kind != "webdav" && strings.EqualFold(filepath.Clean(l.Path), filepath.Clean(abs)) {
+				writeError(w, http.StatusConflict, "该目录已经被书库「"+l.Name+"」使用")
+				return
+			}
+		}
+		lib = &store.Library{Name: req.Name, Path: abs, Type: req.Type, Kind: "local"}
+	default:
+		writeError(w, http.StatusBadRequest, "书库来源不受支持")
+		return
 	}
-
-	lib := &store.Library{Name: req.Name, Path: abs, Type: req.Type}
 	if err := s.store.AddLibrary(lib); err != nil {
 		writeError(w, errStatus(err), "创建书库失败")
 		return
@@ -119,13 +188,17 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := s.store.GetLibrary(id); err != nil {
+	lib, err := s.store.GetLibrary(id)
+	if err != nil {
 		writeError(w, http.StatusNotFound, "书库不存在")
 		return
 	}
 	if err := s.store.DeleteLibrary(id); err != nil {
 		writeError(w, errStatus(err), "删除书库失败")
 		return
+	}
+	if lib.Kind == "webdav" {
+		_ = os.RemoveAll(lib.Path)
 	}
 	s.clearAllCaches()
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

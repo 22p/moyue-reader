@@ -2,7 +2,7 @@
   "id": "/",
   "name": "墨阅 · 私人书库",
   "short_name": "墨阅",
-  "description": "多用户 EPUB / TXT / PDF / 漫画 / Kindle 与有声书库",
+  "description": "EPUB / TXT / PDF / 漫画 / Kindle 与有声书库",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "/",

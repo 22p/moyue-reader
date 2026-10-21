@@ -40,6 +40,7 @@ type ScanStatus struct {
 	Added    int        `json:"added"`
 	Updated  int        `json:"updated"`
 	Skipped  int        `json:"skipped"`
+	Removed  int        `json:"removed"`
 	Failed   int        `json:"failed"`
 	Error    string     `json:"error,omitempty"`
 }
@@ -102,6 +103,7 @@ type Server struct {
 	setupMu    sync.Mutex
 	loginMu    sync.Mutex
 	loginFails map[string]*loginBucket
+	webdavMu   sync.Mutex
 }
 
 type loginBucket struct {

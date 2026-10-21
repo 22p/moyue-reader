@@ -7,7 +7,7 @@ import (
 
 // schemaVersion 是当前数据库结构版本。修改表结构时递增，并在 migrate 中
 // 添加对应的升级步骤，避免升级后旧库缺少字段。
-const schemaVersion = 3
+const schemaVersion = 4
 
 func (s *Store) migrate() error {
 	var version int
@@ -41,6 +41,12 @@ func (s *Store) migrate() error {
 			return err
 		}
 		version = 3
+	}
+	if version < 4 {
+		if err := migrateV4(tx); err != nil {
+			return err
+		}
+		version = 4
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, version)); err != nil {
 		return err
@@ -126,6 +132,32 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at INTEGER NOT NULL DEFAULT 0
 );`)
 	return err
+}
+
+// migrateV4 增加 WebDAV 书库字段。
+func migrateV4(tx *sql.Tx) error {
+	columns := []struct {
+		name string
+		sql  string
+	}{
+		{"kind", `ALTER TABLE libraries ADD COLUMN kind TEXT NOT NULL DEFAULT 'local'`},
+		{"remote_url", `ALTER TABLE libraries ADD COLUMN remote_url TEXT NOT NULL DEFAULT ''`},
+		{"remote_user", `ALTER TABLE libraries ADD COLUMN remote_user TEXT NOT NULL DEFAULT ''`},
+		{"remote_pass", `ALTER TABLE libraries ADD COLUMN remote_pass TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, c := range columns {
+		ok, err := hasColumn(tx, "libraries", c.name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		if _, err := tx.Exec(c.sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func hasColumn(tx *sql.Tx, table, column string) (bool, error) {

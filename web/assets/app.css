@@ -2147,3 +2147,114 @@ select.auth-lang {
   background-size: 5px 5px, 5px 5px;
   background-repeat: no-repeat;
 }
+
+
+/* ============================================================
+   书架文件夹
+   ============================================================ */
+
+.folder-trail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: -10px 0 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.folder-trail[hidden] { display: none; }
+.folder-trail button {
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.folder-trail button:hover { background: var(--surface-2); }
+.folder-sep { opacity: .45; padding: 0 2px; }
+.folder-current {
+  padding: 4px 6px;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+.cover.folder-cover {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background:
+    radial-gradient(120% 80% at 18% 0%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 68%),
+    linear-gradient(155deg, var(--surface), var(--surface-2));
+  border: 1px solid color-mix(in srgb, var(--accent) 16%, var(--line));
+}
+.folder-cover .folder-icon {
+  width: 46px;
+  height: 46px;
+  color: var(--accent);
+  opacity: .9;
+}
+.folder-count {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.folder-card .book-meta h3 { letter-spacing: .02em; }
+
+@media (max-width: 720px) {
+  .folder-trail { margin-top: -6px; font-size: 11.5px; }
+  .folder-cover .folder-icon { width: 36px; height: 36px; }
+  .folder-count { font-size: 10px; padding: 2px 7px; }
+}
+
+/* ============================================================
+   用户菜单：主题 / 语言
+   ============================================================ */
+
+.user-prefs {
+  padding: 4px 0 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.user-pref {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 11px;
+}
+.user-pref > span {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.user-pref select {
+  max-width: 116px;
+  height: 30px;
+  padding: 0 24px 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12px;
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 13px) 13px, calc(100% - 9px) 13px;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+/* 表单条件字段 */
+.field[hidden] { display: none; }
+
+/* 阅读器切换章节时避免 iframe 白底闪一下 */
+#frame { transition: opacity .14s ease; }
+#frame.is-swapping { opacity: 0; }

@@ -3,7 +3,7 @@
  * 避免在共用设备上把某个账号的书籍或进度写入缓存。
  */
 
-const VERSION = 'moyue-v12';
+const VERSION = 'moyue-v15';
 const CACHE = `moyue-shell-${VERSION}`;
 const OFFLINE_URL = '/offline.html';
 

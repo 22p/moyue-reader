@@ -15,3 +15,6 @@ WORKDIR /app
 EXPOSE 8080
 VOLUME ["/app/data", "/app/books"]
 ENTRYPOINT ["moyue", "-addr", ":8080", "-books", "/app/books", "-data", "/app/data"]
+# 容器部署通常位于反向代理后，默认信任 X-Forwarded-*；
+# 直接暴露 8080 时可追加 -trust-proxy=false 关闭。
+CMD ["-trust-proxy"]

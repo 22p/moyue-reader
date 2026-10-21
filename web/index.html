@@ -132,9 +132,26 @@
               <strong id="userName">—</strong>
               <span id="userAccount">@—</span>
             </div>
+            <div class="user-prefs">
+              <label class="user-pref"><span>主题</span>
+                <select id="userTheme" aria-label="主题">
+                  <option value="paper">纸白</option>
+                  <option value="sepia">米黄</option>
+                  <option value="mint">青瓷</option>
+                  <option value="night">夜幕</option>
+                </select>
+              </label>
+              <label class="user-pref"><span>界面语言</span>
+                <select id="userLang" aria-label="界面语言">
+                  <option value="zh">中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                </select>
+              </label>
+            </div>
             <button data-user-act="admin" id="adminEntry"><svg class="icon"><use href="#i-shield"/></svg>管理控制台</button>
             <button data-user-act="install" id="installEntry" hidden><svg class="icon"><use href="#i-download"/></svg>安装到桌面</button>
-            <button data-user-act="lang" id="langEntry"><svg class="icon"><use href="#i-settings"/></svg>界面语言</button>
             <button data-user-act="sessions"><svg class="icon"><use href="#i-shield"/></svg>登录设备</button>
             <button data-user-act="password"><svg class="icon"><use href="#i-lock"/></svg>修改密码</button>
             <button data-user-act="logout"><svg class="icon"><use href="#i-logout"/></svg>退出登录</button>
@@ -151,9 +168,10 @@
 
       <section class="shelf">
         <div class="shelf-head">
-          <h2>我的书架</h2>
+          <h2 id="shelfTitle">我的书架</h2>
           <span class="shelf-count" id="shelfCount"></span>
         </div>
+        <nav class="folder-trail" id="folderTrail" aria-label="文件夹路径" hidden></nav>
         <div class="book-grid" id="bookGrid"></div>
         <div class="empty" id="emptyState" hidden>
           <div class="empty-art">
@@ -198,10 +216,19 @@
       <section class="admin-section" id="adminLibsSection">
         <form class="panel admin-form" id="libForm">
           <h2>添加书库</h2>
-          <p class="panel-desc">填写服务器上的目录路径。支持嵌套目录，自动识别 EPUB、TXT、PDF、CBZ、CBR、FB2、MOBI/AZW3 与音频书；创建后会立即扫描。</p>
+          <p class="panel-desc">选择本地目录或 WebDAV。WebDAV 会先把文件同步到本地缓存，再自动识别 EPUB、TXT、PDF、CBZ、CBR、FB2、MOBI/AZW3 与音频书。</p>
           <div class="form-grid">
             <label class="field"><span>名称</span><input name="name" placeholder="例如：小说 / 技术书" maxlength="40" required></label>
-            <label class="field"><span>服务器路径</span><input name="path" placeholder="/srv/books 或 ./books" required></label>
+            <label class="field"><span>来源</span>
+              <select name="kind" id="libKind">
+                <option value="local">本地目录</option>
+                <option value="webdav">WebDAV</option>
+              </select>
+            </label>
+            <label class="field field-wide" id="libPathField"><span>服务器路径</span><input name="path" placeholder="/srv/books 或 ./books" required></label>
+            <label class="field field-wide" id="libDavUrlField" hidden><span>WebDAV 地址</span><input name="url" placeholder="https://example.com/remote.php/dav/files/me/books" spellcheck="false"></label>
+            <label class="field" id="libDavUserField" hidden><span>用户名（可选）</span><input name="username" autocomplete="off" spellcheck="false"></label>
+            <label class="field" id="libDavPassField" hidden><span>密码（可选）</span><input name="password" type="password" autocomplete="new-password" spellcheck="false"></label>
             <label class="field"><span>类型</span>
               <select name="type">
                 <option value="mixed">全部支持格式</option>

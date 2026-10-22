@@ -936,7 +936,7 @@
 
   function openAdmin({ updateHistory = true } = {}) {
     if (!state.user || !state.user.isAdmin) {
-      toast('需要管理员权限', { type: 'error' });
+      toast(tr('需要管理员权限'), { type: 'error' });
       enterLibrary();
       return;
     }
@@ -950,7 +950,7 @@
     el.admin.hidden = false;
     el.frame.src = 'about:blank';
     state.current = null;
-    document.title = prefs.lang === 'zh' ? '管理控制台 · 墨阅' : 'Admin console · Moyue';
+    document.title = `${tr('管理控制台')} · ${brandName()}`;
     if (updateHistory && location.hash !== '#/admin') {
       history.pushState(null, '', '#/admin');
     }
@@ -1089,23 +1089,31 @@
     }).join('') || '<div class="empty-list">还没有其他账号。</div>';
   }
 
+  function renderAdminFormChrome() {
+    const editId = state.admin.editUserId;
+    const u = editId ? state.admin.users.find((x) => x.id === editId) : null;
+    el.userFormTitle.textContent = tr(u ? '编辑用户' : '创建用户');
+    el.userFormDesc.textContent = u
+      ? tr(`修改 ${u.displayName || u.username} 的密码、角色与书库权限。`)
+      : tr('为家人或朋友创建独立账号，每个人的阅读进度互不影响。');
+    el.userForm.password.placeholder = tr(u ? '留空则不修改' : '至少 6 位');
+    el.userSubmit.textContent = tr(u ? '保存修改' : '创建用户');
+    el.userCancelEdit.hidden = !u;
+  }
+
   function startUserEdit(id) {
     const u = state.admin.users.find((x) => x.id === id);
     if (!u) return;
     state.admin.editUserId = id;
-    el.userFormTitle.textContent = '编辑用户';
-    el.userFormDesc.textContent = `修改 ${u.displayName || u.username} 的密码、角色与书库权限。`;
     el.userForm.username.value = u.username;
     el.userForm.username.disabled = true;
     el.userForm.displayName.value = u.displayName || '';
     el.userForm.password.value = '';
-    el.userForm.password.placeholder = '留空则不修改';
     el.userForm.isAdmin.checked = !!u.isAdmin;
     $$('input[name="lib"]', el.userLibChecks).forEach((cb) => {
       cb.checked = (u.libraries || []).includes(cb.value);
     });
-    el.userSubmit.textContent = '保存修改';
-    el.userCancelEdit.hidden = false;
+    renderAdminFormChrome();
     el.userForm.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
@@ -1113,11 +1121,7 @@
     state.admin.editUserId = null;
     el.userForm.reset();
     el.userForm.username.disabled = false;
-    el.userForm.password.placeholder = '至少 6 位';
-    el.userFormTitle.textContent = '创建用户';
-    el.userFormDesc.textContent = '为家人或朋友创建独立账号，每个人的阅读进度互不影响。';
-    el.userSubmit.textContent = '创建用户';
-    el.userCancelEdit.hidden = true;
+    renderAdminFormChrome();
   }
 
   async function submitUserForm(event) {
@@ -1150,7 +1154,7 @@
           isAdmin: fd.get('isAdmin') === 'on',
           libraries: libs,
         });
-        toast('已创建用户');
+        toast(tr('已创建用户'));
       }
       resetUserForm();
       await loadAdmin();
@@ -1176,6 +1180,25 @@
     else el.ttsAdminVoice.value = TTS_DEFAULTS[provider]?.voice || list[0][0];
   }
 
+  function renderTTSChrome() {
+    const t = state.admin.tts;
+    if (!t) return;
+    el.ttsApiKey.placeholder = state.admin.ttsClearKey
+      ? tr('保存后将清除服务器上的密钥')
+      : t.hasKey ? tr(`已保存 ${t.keyHint}，留空则不修改`) : tr('粘贴 API Key');
+    el.ttsKeyState.className = 'tts-key-state' +
+      (state.admin.ttsClearKey ? ' is-bad' : t.hasKey ? ' is-ok' : '');
+    el.ttsKeyState.textContent = state.admin.ttsClearKey
+      ? tr('保存设置后将清除已配置的 API Key。')
+      : t.hasKey
+        ? tr(`已配置 API Key（${t.keyHint}），密钥只保存在服务器。`)
+        : tr('尚未保存 API Key，启用前需要先填写。');
+    el.ttsClearKey.hidden = !t.hasKey || state.admin.ttsClearKey;
+    const ready = !!t.enabled && !!t.hasKey;
+    el.ttsStateTag.textContent = ready ? tr('已启用') : t.hasKey ? tr('已配置 · 未启用') : tr('未配置');
+    el.ttsStateTag.className = 'tag' + (ready ? ' tag-accent' : '');
+  }
+
   function renderTTSSettings() {
     const t = state.admin.tts;
     if (!t) return;
@@ -1186,15 +1209,7 @@
     el.ttsModel.value = t.model || TTS_DEFAULTS[t.provider || 'mimo'].model;
     fillAdminVoices(t.provider || 'mimo', t.voice);
     el.ttsApiKey.value = '';
-    el.ttsApiKey.placeholder = t.hasKey ? `已保存 ${t.keyHint}，留空则不修改` : '粘贴 API Key';
-    el.ttsKeyState.className = 'tts-key-state' + (t.hasKey ? ' is-ok' : '');
-    el.ttsKeyState.textContent = t.hasKey
-      ? `已配置 API Key（${t.keyHint}），密钥只保存在服务器。`
-      : '尚未保存 API Key，启用前需要先填写。';
-    el.ttsClearKey.hidden = !t.hasKey;
-    const ready = !!t.enabled && !!t.hasKey;
-    el.ttsStateTag.textContent = ready ? '已启用' : t.hasKey ? '已配置 · 未启用' : '未配置';
-    el.ttsStateTag.className = 'tag' + (ready ? ' tag-accent' : '');
+    renderTTSChrome();
     el.ttsTestResult.hidden = true;
     el.ttsTestResult.innerHTML = '';
   }
@@ -1229,17 +1244,14 @@
   el.ttsClearKey.addEventListener('click', () => {
     state.admin.ttsClearKey = true;
     el.ttsApiKey.value = '';
-    el.ttsApiKey.placeholder = '保存后将清除服务器上的密钥';
-    el.ttsKeyState.className = 'tts-key-state is-bad';
-    el.ttsKeyState.textContent = '保存设置后将清除已配置的 API Key。';
-    el.ttsClearKey.hidden = true;
+    renderTTSChrome();
   });
 
   el.ttsForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const payload = ttsFormPayload();
     if (payload.enabled && !payload.apiKey && !state.admin.tts?.hasKey && !payload.clearKey) {
-      toast('启用语音朗读前请填写 API Key', { type: 'error' });
+      toast(tr('启用语音朗读前请填写 API Key'), { type: 'error' });
       return;
     }
     el.ttsSave.disabled = true;
@@ -1247,7 +1259,7 @@
       const data = await api.saveAdminTTS(payload);
       state.admin.tts = data.tts;
       renderTTSSettings();
-      toast(payload.enabled ? '语音朗读已保存并启用' : '语音朗读设置已保存');
+      toast(tr(payload.enabled ? '语音朗读已保存并启用' : '语音朗读设置已保存'));
       await loadTTSStatus();
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -1259,12 +1271,12 @@
   el.ttsTest.addEventListener('click', async () => {
     const payload = ttsFormPayload();
     if (!payload.apiKey && !state.admin.tts?.hasKey) {
-      toast('请先填写 API Key', { type: 'error' });
+      toast(tr('请先填写 API Key'), { type: 'error' });
       return;
     }
     el.ttsTest.disabled = true;
     el.ttsTestResult.hidden = false;
-    el.ttsTestResult.innerHTML = '<span class="spinner-sm"></span> 正在合成测试语音…';
+    el.ttsTestResult.innerHTML = `<span class="spinner-sm"></span> ${esc(tr('正在合成测试语音…'))}`;
     try {
       const res = await fetch('/api/admin/settings/tts/test', {
         method: 'POST',
@@ -1273,7 +1285,7 @@
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        let msg = `测试失败（${res.status}）`;
+        let msg = tr(`测试失败（${res.status}）`);
         try {
           const data = await res.json();
           if (data.error) msg = data.error;
@@ -1282,16 +1294,17 @@
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      el.ttsTestResult.innerHTML = '<strong>测试成功</strong> · 正在播放示例语音。';
+      el.ttsTestResult.innerHTML =
+        `<strong>${esc(tr('测试成功'))}</strong> · ${esc(tr('正在播放示例语音。'))}`;
       const audio = document.createElement('audio');
       audio.controls = true;
       audio.src = url;
       el.ttsTestResult.appendChild(audio);
       audio.play().catch(() => { /* 用户可手动点击播放 */ });
       audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-      toast('语音合成连接正常');
+      toast(tr('语音合成连接正常'));
     } catch (err) {
-      el.ttsTestResult.innerHTML = `<strong>测试失败</strong><br>${esc(err.message)}`;
+      el.ttsTestResult.innerHTML = `<strong>${esc(tr('测试失败'))}</strong><br>${esc(err.message)}`;
     } finally {
       el.ttsTest.disabled = false;
     }
@@ -1816,7 +1829,9 @@
     syncLangUI();
     if (state.view === 'reader' && state.current) {
       document.title = `${state.current.title} · ${lang === 'zh' ? '墨阅' : 'Moyue'}`;
-    } else if (state.view === 'library' || state.view === 'admin') {
+    } else if (state.view === 'admin') {
+      document.title = `${tr('管理控制台')} · ${brandName()}`;
+    } else if (state.view === 'library') {
       document.title = lang === 'zh' ? '墨阅 · 私人书库' : 'Moyue · Private Library';
     } else if (state.view === 'auth') {
       document.title = lang === 'zh'
@@ -1845,6 +1860,8 @@
     } else if (state.view === 'admin') {
       renderAdminLibraries();
       renderAdminUsers();
+      renderAdminFormChrome();
+      renderTTSChrome();
     }
     if (!el.uploadScrim.hidden) renderUploadList();
   }

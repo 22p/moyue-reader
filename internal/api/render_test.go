@@ -37,8 +37,8 @@ func TestRenderChapterRewritesAndSanitizes(t *testing.T) {
 	if strings.Contains(doc, "javascript:") {
 		t.Error("javascript: 链接未被移除")
 	}
-	if !strings.Contains(doc, `href="#moyue-chapter-2"`) {
-		t.Error("章节内链未被转换为阅读器跳转")
+	if !strings.Contains(doc, `href="#moyue-chapter-2#next"`) {
+		t.Error("章节内链未被转换为阅读器跳转，或锚点片段丢失")
 	}
 	if !strings.Contains(doc, `href="https://example.org"`) {
 		t.Error("外部链接不应被改写")
@@ -114,5 +114,29 @@ func TestCleanPathBlocksTraversal(t *testing.T) {
 		if got := cleanPath(in); got != want {
 			t.Errorf("cleanPath(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestRenderChapterDefeatsNestedScript 覆盖嵌套 <script> 的重建攻击：
+// 只替换一轮时，删掉内层标签后残片会拼成新的可执行 <script>。
+func TestRenderChapterDefeatsNestedScript(t *testing.T) {
+	cases := []struct{ name, in string }{
+		{"嵌套 script", `<p><scr<script>x</script>ipt>alert(2)</script></p>`},
+		{"三层嵌套", `<p>a<scr<scr<script>y</script>ipt>z</script>ipt>alert(3)</script></p>`},
+		{"自闭合", `<p><script src="//evil"/><b>x</b></p>`},
+		{"大小写混合", `<p><ScRipT>alert(5)</sCrIpT></p>`},
+	}
+	spine := map[string]int{"oebps/c1.xhtml": 0}
+	for _, c := range cases {
+		doc := renderChapter("book1", 0, "oebps/c1.xhtml",
+			[]byte("<html><body>"+c.in+"</body></html>"), spine, "", "zh-CN")
+		if strings.Contains(strings.ToLower(doc), "<script") {
+			t.Errorf("%s: 清洗后仍重建出 script 标签: %s", c.name, doc)
+		}
+	}
+	// 反向用例：正文里出现 script 字样不得被误删
+	doc := renderChapter("book1", 0, "", []byte(`<p>提到 script 关键字是安全的</p>`), spine, "", "zh-CN")
+	if !strings.Contains(doc, "script 关键字") {
+		t.Error("正文被误伤")
 	}
 }

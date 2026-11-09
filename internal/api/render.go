@@ -55,8 +55,16 @@ type renderCtx struct {
 func renderChapter(bookID string, chapterIndex int, chapterHref string, raw []byte, spine map[string]int, title, lang string) string {
 	s := string(raw)
 
-	// 基础清洗：脚本、内联事件、javascript: 链接
-	s = scriptRe.ReplaceAllString(s, "")
+	// 基础清洗：脚本、内联事件、javascript: 链接。
+	// 移除一段 <script> 可能让前后的残片拼成一个新的 <script>
+	// （例如 `<scr<script>x</script>ipt>`），所以循环到没有变化为止。
+	for i := 0; i < 8; i++ {
+		stripped := scriptRe.ReplaceAllString(s, "")
+		if stripped == s {
+			break
+		}
+		s = stripped
+	}
 	s = eventAttrRe.ReplaceAllString(s, "")
 	s = jsHrefRe.ReplaceAllString(s, ` href="#"`)
 
@@ -184,6 +192,12 @@ func (c *renderCtx) url(raw string) string {
 		return html.EscapeString(val)
 	}
 
+	// 已经指向本项目接口的地址（例如 FB2 内嵌图片的 fb2image?name=…）
+	// 必须连同查询串一起原样保留：下面的换算是给资源路径用的，会丢掉 ?query。
+	if decoded, err := url.PathUnescape(val); err == nil && strings.HasPrefix(decoded, "/api/") {
+		return html.EscapeString(val)
+	}
+
 	frag := ""
 	if i := strings.IndexByte(val, '#'); i >= 0 {
 		val, frag = val[:i], val[i:]
@@ -195,9 +209,6 @@ func (c *renderCtx) url(raw string) string {
 	if err != nil {
 		decoded = val
 	}
-	if strings.HasPrefix(decoded, "/api/") {
-		return html.EscapeString(val)
-	}
 	var full string
 	if strings.HasPrefix(decoded, "/") {
 		full = cleanPath(decoded)
@@ -206,7 +217,8 @@ func (c *renderCtx) url(raw string) string {
 	}
 
 	if idx, ok := c.spine[strings.ToLower(full)]; ok {
-		return fmt.Sprintf("#moyue-chapter-%d", idx)
+		// 保留片段：脚注等指向章节内部锚点的链接，前端按 #moyue-chapter-<idx>#<id> 解析。
+		return fmt.Sprintf("#moyue-chapter-%d%s", idx, frag)
 	}
 	// 指向 spine 之外的 XHTML（如脚注页）不做跳转，避免把原始文档直接装进 iframe
 	switch strings.ToLower(path.Ext(full)) {

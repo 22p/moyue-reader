@@ -461,7 +461,8 @@
     el.emptyHint.hidden = !user.isAdmin;
   }
 
-  function showAuth(mode = 'login', message = '') {
+  async function showAuth(mode = 'login', message = '') {
+    await leaveReaderFullscreen();
     stopHeartbeat();
     stopAdminPoll();
     if (state.tts.active) stopTTS();
@@ -567,7 +568,17 @@
 
   /* ============================ 书库 ============================ */
 
-  function enterLibrary({ updateHistory = true } = {}) {
+  // 阅读器全屏时若直接隐藏 reader，部分浏览器会保留全屏遮罩，
+  // 导致回到书架后整页无法点击，因此离开阅读器前必须先退出全屏。
+  async function leaveReaderFullscreen() {
+    if (!document.fullscreenElement) return;
+    try {
+      await document.exitFullscreen();
+    } catch { /* 忽略 */ }
+  }
+
+  async function enterLibrary({ updateHistory = true } = {}) {
+    await leaveReaderFullscreen();
     stopAdminPoll();
     if (state.tts.active) stopTTS();
     state.view = 'library';
@@ -940,12 +951,13 @@
 
   /* ============================ 管理台 ============================ */
 
-  function openAdmin({ updateHistory = true } = {}) {
+  async function openAdmin({ updateHistory = true } = {}) {
     if (!state.user || !state.user.isAdmin) {
       toast(tr('需要管理员权限'), { type: 'error' });
       enterLibrary();
       return;
     }
+    await leaveReaderFullscreen();
     stopHeartbeat();
     if (state.tts.active) stopTTS();
     state.view = 'admin';

@@ -640,6 +640,8 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   z-index: 60;
   display: flex;
   flex-direction: column;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   background: var(--page-bg);
   animation: fade .25s ease-out;
 }
@@ -936,12 +938,15 @@ input[type="range"]::-moz-range-thumb {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 16px calc(0px + env(safe-area-inset-bottom, 0px));
+  padding: 0 16px;
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--page-bg) 90%, transparent);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
+.reader.is-immersive .reader-bar,
+.reader.is-immersive .reader-foot { display: none; }
+
 .foot-btn {
   display: flex;
   align-items: center;

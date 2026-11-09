@@ -179,6 +179,8 @@
     library: $('#libraryView'),
     admin: $('#adminView'),
     reader: $('#readerView'),
+    readerBar: $('.reader-bar'),
+    readerFoot: $('.reader-foot'),
     topbar: $('.topbar'),
     search: $('#searchInput'),
     sort: $('#sortSelect'),
@@ -295,6 +297,8 @@
     lineVal: $('#lineVal'),
     measureRange: $('#measureRange'),
     measureVal: $('#measureVal'),
+    fullscreenEntry: $('#fullscreenEntry'),
+    fullscreenEntryLabel: $('#fullscreenEntryLabel'),
     resetPrefs: $('#resetPrefs'),
 
     ttsBar: $('#ttsBar'),
@@ -463,6 +467,7 @@
     if (state.tts.active) stopTTS();
     closeDrawers();
     closeMenus();
+    resetReaderChrome();
     el.userPop.hidden = true;
 
     state.view = 'auth';
@@ -567,6 +572,7 @@
     if (state.tts.active) stopTTS();
     state.view = 'library';
     state.current = null;
+    resetReaderChrome();
     document.body.classList.remove('reading');
     el.authView.hidden = true;
     el.admin.hidden = true;
@@ -1321,6 +1327,10 @@
     el.tocDrawer.classList.remove('is-open');
     el.settingsDrawer.classList.remove('is-open');
     el.scrim.classList.remove('is-visible');
+    if (state.view === 'reader' && !readerChromeHidden() && prefersImmersiveReader()) {
+      clearChromeTimer();
+      chromeTimer = setTimeout(() => hideReaderChrome(), 4000);
+    }
   }
 
   function drawerOpen() {
@@ -1329,6 +1339,7 @@
 
   function openDrawer(which, tab) {
     hideAnnoBar();
+    showReaderChrome();
     const target = which === 'toc' ? el.tocDrawer : el.settingsDrawer;
     const other = which === 'toc' ? el.settingsDrawer : el.tocDrawer;
     other.classList.remove('is-open');
@@ -1842,6 +1853,8 @@
     if (state.view === 'reader' && state.current) {
       syncSettingsUI();
       updateChrome();
+      // 朗读按钮的提示是在拿到 TTS 状态时写入的，切语言后要重建一次。
+      if (state.tts.status) updateTTSButton();
       if (state.tts.active) renderTTSBar();
       if (isAudio(state.current)) {
         state.audioReady = false;
@@ -1981,6 +1994,8 @@
     el.measureRange.value = String(prefs.measure);
     el.measureVal.textContent = `${prefs.measure} px`;
     setFill(el.measureRange, (prefs.measure - 560) / (1000 - 560) * 100);
+
+    syncFullscreenEntry();
   }
 
   function setFill(input, percent) {
@@ -2042,6 +2057,103 @@
     el.nextHint.classList.toggle('is-visible', !isPaginated() && !isFixed(state.current) && !isAudio(state.current)
       && state.fraction > 0.965 && state.chapter < total - 1);
     updateBookmarkState();
+  }
+
+  /* ---------------------------- 沉浸阅读 ---------------------------- */
+
+  // 手机、触屏与 PWA 默认启用沉浸阅读：翻页或滚动后收起上下菜单，
+  // 轻点正文中央再唤出。全屏模式下所有尺寸都会收起。
+  let chromeTimer = 0;
+  let chromeShownAt = 0;
+  let chromeBeforeFullscreen = false;
+
+  function prefersImmersiveReader() {
+    return isStandalone()
+      || window.matchMedia('(max-width: 860px), (pointer: coarse)').matches;
+  }
+
+  function readerChromeHidden() {
+    return el.reader.classList.contains('is-immersive');
+  }
+
+  function clearChromeTimer() {
+    clearTimeout(chromeTimer);
+    chromeTimer = 0;
+  }
+
+  function setReaderChrome(hidden) {
+    if (!el.reader || readerChromeHidden() === hidden) return;
+    el.reader.classList.toggle('is-immersive', hidden);
+    chromeShownAt = hidden ? 0 : Date.now();
+    for (const bar of [el.readerBar, el.readerFoot]) {
+      if (!bar) continue;
+      if (hidden) bar.setAttribute('aria-hidden', 'true');
+      else bar.removeAttribute('aria-hidden');
+    }
+    if (hidden && el.readerBar?.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    // 上下栏不占位后阅读区高度会变化，按当前进度重新排版，避免正文被裁切。
+    if (state.view === 'reader') applyReadingLayout();
+  }
+
+  function showImmersionHint() {
+    let seen = false;
+    try { seen = localStorage.getItem('moyue.immersionHint') === '1'; } catch { /* 忽略 */ }
+    if (seen) return;
+    try { localStorage.setItem('moyue.immersionHint', '1'); } catch { /* 忽略 */ }
+    toast(tr('轻点页面中央可显示或隐藏菜单'), { duration: 3200 });
+  }
+
+  function hideReaderChrome({ hint = false } = {}) {
+    if (state.view !== 'reader' || drawerOpen() || readerChromeHidden()) return;
+    clearChromeTimer();
+    setReaderChrome(true);
+    if (hint) showImmersionHint();
+  }
+
+  function showReaderChrome({ autoHide = false } = {}) {
+    if (state.view !== 'reader') return;
+    clearChromeTimer();
+    if (readerChromeHidden()) setReaderChrome(false);
+    if (autoHide && prefersImmersiveReader() && !drawerOpen()) {
+      chromeTimer = setTimeout(() => hideReaderChrome(), 6000);
+    }
+  }
+
+  function toggleReaderChrome() {
+    if (state.view !== 'reader') return;
+    if (readerChromeHidden()) showReaderChrome({ autoHide: true });
+    else hideReaderChrome();
+  }
+
+  // 桌面普通窗口不把「点击正文」变成隐藏工具栏，避免误触；
+  // 手机 / PWA / 全屏阅读时中央点击才负责显隐。
+  function toggleReaderChromeFromPage() {
+    if (prefersImmersiveReader() || readerChromeHidden() || document.fullscreenElement) {
+      toggleReaderChrome();
+    }
+  }
+
+  // 只在手机 / PWA 下自动收起；桌面浏览器保留常驻工具栏。
+  function hideReaderChromeForTurn() {
+    if (prefersImmersiveReader()) hideReaderChrome({ hint: true });
+  }
+
+  // 用底部按钮翻页时先保留工具栏，停止操作后再收起，避免按钮被瞬间隐藏。
+  function scheduleChromeHideAfterTurn() {
+    if (!prefersImmersiveReader() || readerChromeHidden() || state.view !== 'reader' || drawerOpen()) return;
+    clearChromeTimer();
+    chromeTimer = setTimeout(() => hideReaderChrome({ hint: true }), 2400);
+  }
+
+  function resetReaderChrome() {
+    clearChromeTimer();
+    chromeShownAt = Date.now();
+    if (!el.reader) return;
+    el.reader.classList.remove('is-immersive');
+    el.readerBar?.removeAttribute('aria-hidden');
+    el.readerFoot?.removeAttribute('aria-hidden');
   }
 
   function fadeFrameOut() {
@@ -2156,13 +2268,34 @@
     if (win) win.postMessage({ type: 'moyue-audio-seek', fraction }, '*');
   }
 
+  function bindPDFFrame() {
+    let doc;
+    try {
+      doc = el.frame.contentDocument;
+    } catch {
+      return;
+    }
+    if (!doc) return;
+    doc.addEventListener('click', (event) => {
+      if (event.target.closest && event.target.closest('a')) return;
+      toggleReaderChromeFromPage();
+    });
+  }
+
   function bindComicFrame(doc) {
     const win = el.frame.contentWindow;
     doc.addEventListener('click', (event) => {
       if (event.target.closest && event.target.closest('a')) return;
       const width = win.innerWidth || 1;
-      if (event.clientX > width * 0.65) nextChapter();
-      else if (event.clientX < width * 0.35) prevChapter();
+      if (event.clientX > width * 0.65) {
+        nextChapter();
+        hideReaderChromeForTurn();
+      } else if (event.clientX < width * 0.35) {
+        prevChapter();
+        hideReaderChromeForTurn();
+      } else {
+        toggleReaderChromeFromPage();
+      }
     });
     win.addEventListener('scroll', () => handleFrameScroll(), { passive: true });
     doc.addEventListener('scroll', () => handleFrameScroll(), { passive: true });
@@ -2215,6 +2348,7 @@
         updateChrome();
         updateProgressUI();
         renderTOC();
+        hideReaderChromeForTurn();
       }
       scheduleSave();
     }
@@ -2290,13 +2424,16 @@
     }
     const anchor = event.target.closest && event.target.closest('a');
     if (!anchor) {
+      const win = el.frame.contentWindow;
+      const selection = win?.getSelection?.();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) return;
       if (isPaginated() && state.page.active) {
-        const win = el.frame.contentWindow;
-        const selection = win?.getSelection?.();
-        if (selection && !selection.isCollapsed && selection.toString().trim()) return;
         const width = win?.innerWidth || 1;
         if (event.clientX > width * 0.72) advance(1);
         else if (event.clientX < width * 0.28) advance(-1);
+        else toggleReaderChromeFromPage();
+      } else {
+        toggleReaderChromeFromPage();
       }
       return;
     }
@@ -2307,6 +2444,7 @@
       if (!Number.isNaN(index)) {
         closeDrawers();
         loadChapter(index, 0);
+        hideReaderChromeForTurn();
       }
     } else if (/^https?:\/\//i.test(href)) {
       anchor.setAttribute('target', '_blank');
@@ -2328,6 +2466,10 @@
       state.fraction = max > 0 ? clamp(win.scrollY / max, 0, 1) : 0;
       updateProgressUI();
       scheduleSave();
+      if (!readerChromeHidden() && prefersImmersiveReader() && Date.now() - chromeShownAt > 1500) {
+        clearChromeTimer();
+        chromeTimer = setTimeout(() => hideReaderChrome({ hint: true }), 600);
+      }
     });
   }
 
@@ -2459,17 +2601,21 @@
   }
 
   // advance 在当前章节内翻页；到达本章首尾时切换到相邻章节。
-  function advance(delta) {
+  function advance(delta, { hideChrome = true } = {}) {
     if (!state.current) return;
     if (isPaginated() && state.page.active) {
       const target = state.page.page + delta;
       if (target >= 0 && target < state.page.pages) {
         setPage(target);
+        if (hideChrome) hideReaderChromeForTurn();
+        else scheduleChromeHideAfterTurn();
         return;
       }
     }
     if (delta > 0) nextChapter();
     else prevChapter();
+    if (hideChrome) hideReaderChromeForTurn();
+    else scheduleChromeHideAfterTurn();
   }
 
   function chapterStep() {
@@ -2509,6 +2655,7 @@
     }
     if (book.type === 'pdf') {
       postPDFTheme();
+      bindPDFFrame();
       updateChrome();
       updateProgressUI();
       fadeFrameIn();
@@ -2711,6 +2858,7 @@
       el.library.hidden = true;
       el.admin.hidden = true;
       el.authView.hidden = true;
+      resetReaderChrome();
       el.reader.hidden = false;
       el.rTitle.textContent = detail.title;
       document.title = `${detail.title} · ${brandName()}`;
@@ -2838,9 +2986,9 @@
     if (!el.markBtn) return;
     const marked = !!bookmarkAtCurrent();
     el.markBtn.classList.toggle('is-on', marked);
-    const label = marked ? '取消书签 (B)' : '书签 (B)';
+    const label = marked ? tr('取消书签 (B)') : tr('书签 (B)');
     el.markBtn.title = label;
-    el.markBtn.setAttribute('aria-label', marked ? '取消书签' : '书签');
+    el.markBtn.setAttribute('aria-label', marked ? tr('取消书签') : tr('书签'));
   }
 
   async function toggleBookmark() {
@@ -2917,21 +3065,47 @@
     loadChapter(chapter, fraction);
   }
 
-  async function toggleFullscreen() {
+  function syncFullscreenEntry() {
+    if (!el.fullscreenEntry) return;
+    const on = !!document.fullscreenElement;
+    const label = tr(on ? '退出全屏阅读' : '全屏阅读');
+    if (el.fullscreenEntryLabel) el.fullscreenEntryLabel.textContent = label;
+    el.fullscreenEntry.querySelector('use')?.setAttribute('href', on ? '#i-shrink' : '#i-expand');
+    el.fullscreenEntry.title = label;
+    el.fullscreenEntry.setAttribute('aria-label', label);
+  }
+
+  async function toggleFullscreen({ closePanel = false } = {}) {
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+      } catch { /* 忽略 */ }
+      return;
+    }
+    if (closePanel) closeDrawers();
     try {
-      if (!document.fullscreenElement) {
-        await el.reader.requestFullscreen?.();
-      } else {
-        await document.exitFullscreen?.();
-      }
+      if (typeof el.reader.requestFullscreen !== 'function') throw new Error('unsupported');
+      await el.reader.requestFullscreen();
+      if (document.fullscreenElement) return;
+      throw new Error('not entered');
     } catch {
-      toast('当前浏览器不支持全屏', { type: 'error' });
+      // iOS PWA 与部分内嵌浏览器不支持元素全屏，退化为隐藏上下菜单的沉浸阅读。
+      closeDrawers();
+      hideReaderChrome({ hint: true });
+      toast(tr('当前环境无法进入系统全屏，已切换沉浸阅读'), { duration: 3200 });
     }
   }
 
   document.addEventListener('fullscreenchange', () => {
     const on = !!document.fullscreenElement;
     el.fullBtn.querySelector('use').setAttribute('href', on ? '#i-shrink' : '#i-expand');
+    syncFullscreenEntry();
+    if (on) {
+      chromeBeforeFullscreen = readerChromeHidden();
+      hideReaderChrome();
+    } else if (!chromeBeforeFullscreen) {
+      showReaderChrome();
+    }
   });
 
   /* ============================ 语音朗读 ============================ */
@@ -2962,7 +3136,7 @@
   function updateTTSButton() {
     const ok = ttsEnabled();
     el.ttsBtn.classList.toggle('is-off', !ok);
-    el.ttsBtn.title = ok ? '语音朗读 (R)' : '语音朗读（管理员尚未配置）';
+    el.ttsBtn.title = ok ? tr('语音朗读 (R)') : tr('语音朗读（管理员尚未配置）');
     el.ttsBtn.setAttribute('aria-label', el.ttsBtn.title);
   }
 
@@ -3216,7 +3390,7 @@
       el.ttsStatus.textContent = tr(`已暂停 · 第 ${Math.min(t.index + 1, total)} / ${total} 段${partInfo}`);
     }
     el.ttsPlayIcon.querySelector('use').setAttribute('href', t.playing ? '#i-pause' : '#i-play');
-    el.ttsPlay.title = t.playing ? '暂停' : '继续朗读';
+    el.ttsPlay.title = tr(t.playing ? '暂停' : '继续朗读');
     el.ttsPlay.setAttribute('aria-label', el.ttsPlay.title);
   }
 
@@ -3938,6 +4112,7 @@
     prefs.measure = Number(el.measureRange.value);
     applyPrefs();
   });
+  el.fullscreenEntry?.addEventListener('click', () => toggleFullscreen({ closePanel: true }));
   el.resetPrefs.addEventListener('click', () => {
     Object.assign(prefs, DEFAULT_PREFS);
     applyPrefs();
@@ -4326,9 +4501,21 @@
   el.markBtn.addEventListener('click', toggleBookmark);
   el.fullBtn.addEventListener('click', () => toggleFullscreen());
   el.scrim.addEventListener('click', closeDrawers);
-  el.prevBtn.addEventListener('click', () => advance(-1));
-  el.nextBtn.addEventListener('click', () => advance(1));
+  // 点底部按钮说明正在操作菜单，此时不收起工具栏；正文翻页才进入沉浸状态。
+  el.prevBtn.addEventListener('click', () => advance(-1, { hideChrome: false }));
+  el.nextBtn.addEventListener('click', () => advance(1, { hideChrome: false }));
   el.nextHint.addEventListener('click', () => advance(1));
+
+  // 上下菜单在手机上会自动收起，操作后重新计时。
+  el.readerBar.addEventListener('click', clearChromeTimer);
+  el.readerFoot.addEventListener('pointerdown', clearChromeTimer);
+
+  // 分页时正文 iframe 只占版心宽度，点两侧留白同样能唤出菜单。
+  el.stage.addEventListener('click', (e) => {
+    if (e.target === el.frame || e.target.closest('#nextHint')) return;
+    if (state.selection) return;
+    toggleReaderChromeFromPage();
+  });
 
   $$('[data-close-drawer]').forEach((btn) => btn.addEventListener('click', closeDrawers));
 

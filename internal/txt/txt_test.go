@@ -161,4 +161,40 @@ func TestIsHeadingRejectsParagraph(t *testing.T) {
 	if !IsHeading("番外 后日谈") {
 		t.Error("special heading rejected")
 	}
+	for _, c := range []string{"第四章 是你吗？", "第五章 恩！", "第六章 真的吗?!", "第7章 为什么?"} {
+		if !IsHeading(c) {
+			t.Errorf("标题中的问号/感叹号不应被拒绝: %q", c)
+		}
+	}
+}
+
+func TestSplitTitlesWithPunctuation(t *testing.T) {
+	text := strings.TrimSpace(`第四章 是你吗？
+
+门外没有人。
+
+第五章 恩！
+
+他应了一声。
+
+第六章 真的吗？
+
+灯灭了。`)
+
+	chapters := Split(text)
+	if len(chapters) != 3 {
+		for _, c := range chapters {
+			t.Logf("chapter: %q (%d-%d)", c.Title, c.Start, c.End)
+		}
+		t.Fatalf("chapters = %d, want 3", len(chapters))
+	}
+	want := []string{"第四章 是你吗？", "第五章 恩！", "第六章 真的吗？"}
+	for i, title := range want {
+		if chapters[i].Title != title {
+			t.Errorf("chapter %d title = %q, want %q", i, chapters[i].Title, title)
+		}
+	}
+	if !strings.Contains(text[chapters[1].Start:chapters[1].End], "他应了一声") {
+		t.Error("chapter range wrong")
+	}
 }

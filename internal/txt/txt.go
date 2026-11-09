@@ -181,7 +181,9 @@ func IsHeading(line string) bool {
 	if utf8.RuneCountInString(s) > 42 {
 		return false
 	}
-	if strings.ContainsAny(s, "。！？!?；;") {
+	// 问号、感叹号常出现在章节标题里（如「第五章 恩！」），不能据此排除；
+	// 句号、分号则更像正文叙述，用来挡住「第一章的内容非常精彩，我读了三遍。」这类误判。
+	if strings.ContainsAny(s, "。；;") {
 		return false
 	}
 	return reCNChapter.MatchString(s) || reSpecial.MatchString(s) || reEnglish.MatchString(s)

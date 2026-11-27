@@ -46,7 +46,7 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	if utf8.RuneCountInString(q) < 1 || utf8.RuneCountInString(q) > 60 {
-		writeError(w, http.StatusBadRequest, "搜索词需为 1-60 个字符")
+		writeError(w, http.StatusBadRequest, "search query must be 1-60 characters")
 		return
 	}
 
@@ -80,7 +80,7 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 	case "txt":
 		tb, err := s.parseTXT(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "TXT 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse TXT")
 			return
 		}
 		for i, ch := range tb.Chapters {
@@ -99,7 +99,7 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 	case "fb2":
 		fb, err := s.parseFB2(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "FB2 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse FB2")
 			return
 		}
 		for i, ch := range fb.Chapters {
@@ -114,7 +114,7 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 	case "mobi", "azw", "azw3", "prc":
 		_, list, err := s.parseKindle(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "MOBI/AZW3 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse MOBI/AZW3")
 			return
 		}
 		for i, ch := range list {
@@ -129,12 +129,12 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 	case "epub":
 		eb, err := s.parseEPUB(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "EPUB 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse EPUB")
 			return
 		}
 		ar, err := epub.OpenArchive(s.bookPath(b))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "无法打开电子书")
+			writeError(w, http.StatusInternalServerError, "cannot open ebook")
 			return
 		}
 		defer ar.Close()
@@ -152,7 +152,7 @@ func (s *Server) searchBook(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	default:
-		writeError(w, http.StatusBadRequest, "该格式暂不支持全文搜索")
+		writeError(w, http.StatusBadRequest, "full-text search is not supported for this format")
 		return
 	}
 

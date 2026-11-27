@@ -57,7 +57,7 @@
 
 <div id="app">
 
-  <!-- ============ 登录 / 初始化 ============ -->
+  <!-- ============ 登录 ============ -->
   <div class="auth" id="authView" hidden>
     <div class="auth-art" aria-hidden="true">
       <div class="auth-art-inner">
@@ -74,32 +74,19 @@
         <option value="ja">日本語</option>
         <option value="ko">한국어</option>
       </select>
-      <form class="auth-card" id="authForm" autocomplete="on">
+      <div class="auth-card">
         <div class="auth-mobile-brand">
           <span class="brand-mark"><svg viewBox="0 0 24 24" class="mark-svg"><use href="#i-book"/></svg></span>
           <b>墨阅</b>
         </div>
-        <span class="eyebrow" id="authEyebrow">欢迎回来</span>
+        <span class="eyebrow" id="authEyebrow">统一身份认证</span>
         <h2 id="authTitle">登录书库</h2>
-        <p class="auth-desc" id="authDesc">使用管理员为你创建的账号登录。</p>
-
-        <label class="field">
-          <span>用户名</span>
-          <input id="authUser" name="username" type="text" autocomplete="username" required>
-        </label>
-        <label class="field">
-          <span>密码</span>
-          <input id="authPass" name="password" type="password" autocomplete="current-password" required>
-        </label>
-        <label class="field" id="authConfirmWrap" hidden>
-          <span>确认密码</span>
-          <input id="authConfirm" type="password" autocomplete="new-password">
-        </label>
+        <p class="auth-desc" id="authDesc">使用身份提供商账号登录。</p>
 
         <div class="auth-error" id="authError" hidden></div>
-        <button class="btn btn-primary btn-block" id="authSubmit" type="submit">登录</button>
-        <p class="auth-hint" id="authHint">首次部署？创建管理员账号后即可开始整理书库。</p>
-      </form>
+        <a class="btn btn-primary btn-block" id="authSubmit" href="/api/auth/oidc/start">使用统一身份登录</a>
+        <p class="auth-hint" id="authHint">登录由身份提供商处理，墨阅不保存密码。</p>
+      </div>
     </div>
   </div>
 
@@ -153,7 +140,6 @@
             <button data-user-act="admin" id="adminEntry"><svg class="icon"><use href="#i-shield"/></svg>管理控制台</button>
             <button data-user-act="install" id="installEntry" hidden><svg class="icon"><use href="#i-download"/></svg>安装到桌面</button>
             <button data-user-act="sessions"><svg class="icon"><use href="#i-shield"/></svg>登录设备</button>
-            <button data-user-act="password"><svg class="icon"><use href="#i-lock"/></svg>修改密码</button>
             <button data-user-act="logout"><svg class="icon"><use href="#i-logout"/></svg>退出登录</button>
           </div>
         </div>
@@ -252,27 +238,26 @@
       </section>
 
       <section class="admin-section" id="adminUsersSection" hidden>
-        <form class="panel admin-form" id="userForm">
-          <h2 id="userFormTitle">创建用户</h2>
-          <p class="panel-desc" id="userFormDesc">为家人或朋友创建独立账号，每个人的阅读进度互不影响。</p>
+        <form class="panel admin-form" id="userForm" hidden>
+          <h2 id="userFormTitle">编辑用户权限</h2>
+          <p class="panel-desc" id="userFormDesc">调整显示名称与可访问的书库。管理员由服务器 OIDC 白名单决定。</p>
           <div class="form-grid">
-            <label class="field"><span>用户名</span><input name="username" placeholder="2-24 个字符" maxlength="24" required></label>
             <label class="field"><span>显示名称</span><input name="displayName" placeholder="选填" maxlength="40"></label>
-            <label class="field"><span>密码</span><input name="password" type="password" placeholder="至少 6 位" autocomplete="new-password"></label>
           </div>
           <div class="perm-block">
-            <label class="checkbox"><input type="checkbox" name="isAdmin">设为管理员（可管理书库与用户）</label>
+            <p class="panel-desc" id="userAdminNote">管理员由服务器启动参数 -oidc-admins 白名单决定，不能在此修改。</p>
             <div class="perm-libs">
               <span class="perm-label">可访问的书库</span>
               <div class="lib-checks" id="userLibChecks"></div>
             </div>
           </div>
           <div class="form-actions">
-            <button class="btn btn-primary" type="submit" id="userSubmit">创建用户</button>
-            <button class="btn btn-ghost" type="button" id="userCancelEdit" hidden>取消编辑</button>
+            <button class="btn btn-primary" type="submit" id="userSubmit">保存修改</button>
+            <button class="btn btn-ghost" type="button" id="userCancelEdit">取消编辑</button>
           </div>
         </form>
 
+        <p class="panel-desc" id="userListHint">用户首次通过统一身份登录后会自动出现在这里。</p>
         <div class="admin-list-head">
           <h2>账号列表</h2>
           <button class="btn btn-ghost btn-sm" id="refreshUsers"><svg class="icon"><use href="#i-rotate"/></svg>刷新</button>
@@ -548,7 +533,7 @@
   <div class="drop-inner">
     <svg class="icon icon-lg"><use href="#i-upload"/></svg>
     <h3>松开即可导入</h3>
-    <p id="dropHint">支持 EPUB / TXT / PDF / 漫画 / FB2 / MOBI / AZW3 / 有声书</p>
+    <p>支持 EPUB / TXT / PDF / 漫画 / FB2 / MOBI / AZW3 / 有声书</p>
   </div>
 </div>
 
@@ -561,20 +546,6 @@
       <button class="btn btn-danger" id="dialogOk">确定</button>
     </div>
   </div>
-</div>
-
-<div class="dialog-scrim" id="passwordScrim" hidden>
-  <form class="dialog" id="passwordForm">
-    <h3>修改密码</h3>
-    <p>修改后当前登录仍然有效，其他设备需要重新登录。</p>
-    <label class="field"><span>当前密码</span><input type="password" id="pwCurrent" autocomplete="current-password" required></label>
-    <label class="field"><span>新密码</span><input type="password" id="pwNew" autocomplete="new-password" required></label>
-    <label class="field"><span>确认新密码</span><input type="password" id="pwConfirm" autocomplete="new-password" required></label>
-    <div class="dialog-actions">
-      <button class="btn btn-ghost" type="button" id="pwCancel">取消</button>
-      <button class="btn btn-primary" type="submit">保存</button>
-    </div>
-  </form>
 </div>
 
 <div class="dialog-scrim" id="noteScrim" hidden>

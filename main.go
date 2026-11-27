@@ -16,8 +16,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"moyue/internal/api"
+	"moyue/internal/oidc"
 	"moyue/internal/store"
 )
 
@@ -25,11 +27,16 @@ import (
 var embedded embed.FS
 
 func main() {
-	addr := flag.String("addr", ":8080", "监听地址，例如 :8080")
-	dataDir := flag.String("data", "data", "阅读数据目录（进度、书签、统计）")
-	booksDir := flag.String("books", "books", "EPUB 文件存放目录")
-	debug := flag.Bool("debug", false, "输出调试日志")
-	trustProxy := flag.Bool("trust-proxy", false, "部署在受信任反向代理后（读取 X-Forwarded-*）")
+	addr := flag.String("addr", ":8080", "listen address, for example :8080")
+	dataDir := flag.String("data", "data", "reading data directory (progress, bookmarks, stats)")
+	booksDir := flag.String("books", "books", "directory for EPUB files")
+	debug := flag.Bool("debug", false, "enable debug logging")
+	trustProxy := flag.Bool("trust-proxy", false, "trust a reverse proxy (read X-Forwarded-*)")
+	oidcDiscovery := flag.String("oidc-discovery", envDefault("", "MOYUE_OIDC_DISCOVERY"), "OIDC discovery URL, e.g. https://id.example.com/.well-known/openid-configuration")
+	oidcClientID := flag.String("oidc-client-id", envDefault("", "MOYUE_OIDC_CLIENT_ID"), "OIDC client id")
+	oidcClientSecret := flag.String("oidc-client-secret", envDefault("", "MOYUE_OIDC_CLIENT_SECRET"), "OIDC client secret (may be empty for public clients)")
+	oidcAdmins := flag.String("oidc-admins", envDefault("", "MOYUE_OIDC_ADMINS"), "comma-separated admin OIDC subject allowlist")
+	oidcScopes := flag.String("oidc-scopes", envDefault("openid profile email", "MOYUE_OIDC_SCOPES"), "OIDC scopes, separated by spaces or commas")
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -40,25 +47,47 @@ func main() {
 
 	web, err := fs.Sub(embedded, "web")
 	if err != nil {
-		slog.Error("加载内置页面失败", "err", err)
+		slog.Error("failed to load embedded pages", "err", err)
 		os.Exit(1)
 	}
 	if err := os.MkdirAll(*booksDir, 0o755); err != nil {
-		slog.Error("无法创建书库目录", "err", err, "dir", *booksDir)
+		slog.Error("cannot create library directory", "err", err, "dir", *booksDir)
 		os.Exit(1)
 	}
 	st, err := store.Open(*dataDir)
 	if err != nil {
-		slog.Error("无法打开数据库", "err", err, "dir", *dataDir)
+		slog.Error("cannot open database", "err", err, "dir", *dataDir)
 		os.Exit(1)
 	}
-	srv, err := api.New(st, *booksDir, web, api.Options{TrustProxy: *trustProxy})
+	oidcConfig := oidc.Config{
+		DiscoveryURL: *oidcDiscovery,
+		ClientID:     *oidcClientID,
+		ClientSecret: *oidcClientSecret,
+		Scopes:       splitList(*oidcScopes),
+		AdminIDs:     splitList(*oidcAdmins),
+	}
+	var oidcClient *oidc.Client
+	if oidcConfig.Enabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		oidcClient, err = oidc.New(ctx, oidcConfig)
+		cancel()
+		if err != nil {
+			slog.Error("failed to initialize OIDC login", "err", err)
+			os.Exit(1)
+		}
+		if len(oidcConfig.AdminIDs) == 0 {
+			slog.Warn("OIDC admin allowlist is empty; no signed-in user will be an administrator")
+		}
+	} else {
+		slog.Warn("-oidc-discovery is not set; sign-in will be unavailable")
+	}
+	srv, err := api.New(st, *booksDir, web, api.Options{TrustProxy: *trustProxy, OIDC: oidcClient})
 	if err != nil {
-		slog.Error("初始化服务失败", "err", err)
+		slog.Error("failed to initialize server", "err", err)
 		os.Exit(1)
 	}
 	if err := srv.EnsureDefaultLibrary(); err != nil {
-		slog.Error("初始化默认书库失败", "err", err)
+		slog.Error("failed to initialize the default library", "err", err)
 		os.Exit(1)
 	}
 	srv.ScanAll()
@@ -81,21 +110,42 @@ func main() {
 	}
 
 	go func() {
-		slog.Info("墨阅已启动", "url", displayURL, "books", *booksDir, "db", st.Path())
+		slog.Info("Moyue started", "url", displayURL, "books", *booksDir, "db", st.Path())
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("服务异常退出", "err", err)
+			slog.Error("server exited unexpectedly", "err", err)
 			stop()
 		}
 	}()
 
 	<-ctx.Done()
-	slog.Info("正在关闭服务…")
+	slog.Info("shutting down…")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		slog.Error("关闭超时", "err", err)
+		slog.Error("shutdown timed out", "err", err)
 	}
 	if err := st.Close(); err != nil {
-		slog.Error("关闭数据库失败", "err", err)
+		slog.Error("failed to close database", "err", err)
 	}
+}
+
+// envDefault 返回环境变量的值；为空或未设置时使用回退值。
+func envDefault(fallback, key string) string {
+	if value, ok := os.LookupEnv(key); ok && strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func splitList(raw string) []string {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
 }

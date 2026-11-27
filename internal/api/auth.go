@@ -10,17 +10,14 @@ import (
 	"moyue/internal/store"
 )
 
-const (
-	loginWindow    = 10 * time.Minute
-	loginMaxFailed = 10
-)
-
 type userView struct {
 	ID          string    `json:"id"`
 	Username    string    `json:"username"`
 	DisplayName string    `json:"displayName"`
 	IsAdmin     bool      `json:"isAdmin"`
 	Libraries   []string  `json:"libraries"`
+	Subject     string    `json:"subject,omitempty"`
+	Email       string    `json:"email,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -35,6 +32,8 @@ func viewUser(u *store.User) userView {
 		DisplayName: u.DisplayName,
 		IsAdmin:     u.IsAdmin,
 		Libraries:   append([]string{}, libs...),
+		Subject:     u.OIDCSubject,
+		Email:       u.Email,
 		CreatedAt:   u.CreatedAt,
 	}
 }
@@ -44,7 +43,7 @@ func hashToken(token string) string {
 }
 
 func (s *Server) authState(w http.ResponseWriter, r *http.Request) {
-	resp := map[string]any{"needsSetup": s.store.CountUsers() == 0}
+	resp := map[string]any{"oidcEnabled": s.oidc != nil}
 	if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
 		if sess, ok := s.store.GetSession(hashToken(cookie.Value)); ok {
 			if u, err := s.store.GetUser(sess.UserID); err == nil {
@@ -55,92 +54,7 @@ func (s *Server) authState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
-	s.setupMu.Lock()
-	defer s.setupMu.Unlock()
-	if s.store.CountUsers() > 0 {
-		writeError(w, http.StatusConflict, "系统已经初始化，请直接登录")
-		return
-	}
-	var req struct {
-		Username    string `json:"username"`
-		Password    string `json:"password"`
-		DisplayName string `json:"displayName"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
-		return
-	}
-	req.Username = strings.TrimSpace(req.Username)
-	if err := auth.ValidateUsername(req.Username); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := auth.ValidatePassword(req.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	hash, err := auth.HashPassword(req.Password)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "密码处理失败")
-		return
-	}
-	display := strings.TrimSpace(req.DisplayName)
-	if display == "" {
-		display = req.Username
-	}
-	libs := make([]string, 0, len(s.store.ListLibraries()))
-	for _, l := range s.store.ListLibraries() {
-		libs = append(libs, l.ID)
-	}
-	u := &store.User{
-		Username:     req.Username,
-		DisplayName:  display,
-		PasswordHash: hash,
-		IsAdmin:      true,
-		Libraries:    libs,
-	}
-	if err := s.store.CreateUser(u); err != nil {
-		writeError(w, errStatus(err), "创建管理员失败")
-		return
-	}
-	if err := s.issueSession(w, r, u); err != nil {
-		writeError(w, http.StatusInternalServerError, "创建会话失败")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"user": viewUser(u)})
-}
-
-func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	ip := s.clientIP(r)
-	if s.loginBlocked(ip) {
-		writeError(w, http.StatusTooManyRequests, "尝试次数过多，请稍后再试")
-		return
-	}
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
-		return
-	}
-	u, err := s.store.GetUserByName(strings.TrimSpace(req.Username))
-	if err != nil || !auth.VerifyPassword(u.PasswordHash, req.Password) {
-		s.noteLoginFailure(ip)
-		time.Sleep(120 * time.Millisecond)
-		writeError(w, http.StatusUnauthorized, "用户名或密码错误")
-		return
-	}
-	s.clearLoginFailures(ip)
-	if err := s.issueSession(w, r, u); err != nil {
-		writeError(w, http.StatusInternalServerError, "创建会话失败")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"user": viewUser(u)})
-}
-
-func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *store.User) error {
+func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *store.User, idToken string) error {
 	token, err := auth.NewToken()
 	if err != nil {
 		return err
@@ -150,6 +64,7 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *store.U
 		UserID:    u.ID,
 		UserAgent: truncate(r.UserAgent(), 300),
 		IP:        s.clientIP(r),
+		IDToken:   idToken,
 		CreatedAt: now,
 		LastSeen:  now,
 		ExpiresAt: now.Add(sessionTTL),
@@ -170,51 +85,24 @@ func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, u *store.U
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	redirectURL := ""
 	if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
-		_ = s.store.DeleteSession(hashToken(cookie.Value))
+		key := hashToken(cookie.Value)
+		if sess, ok := s.store.GetSession(key); ok && s.oidc != nil {
+			redirectURL = s.oidc.LogoutURL(s.oidcPostLogoutRedirectURL(r), sess.IDToken)
+		}
+		_ = s.store.DeleteSession(key)
 	}
 	s.clearSessionCookie(w, r)
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	resp := map[string]any{"ok": true}
+	if redirectURL != "" {
+		resp["redirectUrl"] = redirectURL
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"user": viewUser(currentUser(r))})
-}
-
-func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		CurrentPassword string `json:"currentPassword"`
-		NewPassword     string `json:"newPassword"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
-		return
-	}
-	u := currentUser(r)
-	if !auth.VerifyPassword(u.PasswordHash, req.CurrentPassword) {
-		writeError(w, http.StatusBadRequest, "当前密码不正确")
-		return
-	}
-	if err := auth.ValidatePassword(req.NewPassword); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	hash, err := auth.HashPassword(req.NewPassword)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "密码处理失败")
-		return
-	}
-	if err := s.store.UpdateUser(u.ID, func(user *store.User) error {
-		user.PasswordHash = hash
-		return nil
-	}); err != nil {
-		writeError(w, errStatus(err), "修改密码失败")
-		return
-	}
-	if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
-		_ = s.store.DeleteOtherSessions(u.ID, hashToken(cookie.Value))
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) clientIP(r *http.Request) string {
@@ -264,37 +152,6 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) loginBlocked(ip string) bool {
-	s.loginMu.Lock()
-	defer s.loginMu.Unlock()
-	bucket, ok := s.loginFails[ip]
-	if !ok {
-		return false
-	}
-	if time.Since(bucket.first) > loginWindow {
-		delete(s.loginFails, ip)
-		return false
-	}
-	return bucket.count >= loginMaxFailed
-}
-
-func (s *Server) noteLoginFailure(ip string) {
-	s.loginMu.Lock()
-	defer s.loginMu.Unlock()
-	bucket, ok := s.loginFails[ip]
-	if !ok || time.Since(bucket.first) > loginWindow {
-		s.loginFails[ip] = &loginBucket{count: 1, first: time.Now()}
-		return
-	}
-	bucket.count++
-}
-
-func (s *Server) clearLoginFailures(ip string) {
-	s.loginMu.Lock()
-	delete(s.loginFails, ip)
-	s.loginMu.Unlock()
-}
-
 /* --------------------------- 登录设备管理 --------------------------- */
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -329,7 +186,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := s.store.DeleteSessionByID(u.ID, id); err != nil {
-		writeError(w, errStatus(err), "撤销会话失败")
+		writeError(w, errStatus(err), "failed to revoke session")
 		return
 	}
 	if isCurrent {
@@ -342,11 +199,11 @@ func (s *Server) revokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	cookie, err := r.Cookie(sessionCookie)
 	if err != nil || cookie.Value == "" {
-		writeError(w, http.StatusUnauthorized, "请先登录")
+		writeError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if err := s.store.DeleteOtherSessions(u.ID, hashToken(cookie.Value)); err != nil {
-		writeError(w, http.StatusInternalServerError, "撤销会话失败")
+		writeError(w, http.StatusInternalServerError, "failed to revoke session")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

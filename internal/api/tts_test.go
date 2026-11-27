@@ -64,11 +64,12 @@ func TestTTSSettingsAndSpeak(t *testing.T) {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
-	admin := newTestClient(t, ts.URL)
-
-	if code, _ := admin.do("POST", "/api/auth/setup", map[string]string{"username": "admin", "password": "admin123"}); code != http.StatusCreated {
-		t.Fatalf("setup = %d", code)
+	adminUser := &store.User{Username: "admin", DisplayName: "Admin", IsAdmin: true}
+	if err := st.CreateUser(adminUser); err != nil {
+		t.Fatal(err)
 	}
+	admin := newTestClient(t, ts.URL)
+	signInAs(t, admin, st, adminUser)
 
 	code, body := admin.do("GET", "/api/admin/settings/tts", nil)
 	if code != http.StatusOK {
@@ -179,15 +180,12 @@ func TestTTSSettingsAndSpeak(t *testing.T) {
 	}
 
 	// 非管理员不能修改设置。
-	if code, _ := admin.do("POST", "/api/admin/users", map[string]any{
-		"username": "reader", "password": "reader123", "libraries": []string{lib.ID},
-	}); code != http.StatusCreated {
-		t.Fatalf("create user = %d", code)
+	readerUser := &store.User{Username: "reader", DisplayName: "Reader", Libraries: []string{lib.ID}}
+	if err := st.CreateUser(readerUser); err != nil {
+		t.Fatal(err)
 	}
 	reader := newTestClient(t, ts.URL)
-	if code, _ := reader.do("POST", "/api/auth/login", map[string]string{"username": "reader", "password": "reader123"}); code != http.StatusOK {
-		t.Fatalf("reader login = %d", code)
-	}
+	signInAs(t, reader, st, readerUser)
 	if code, _ := reader.do("PUT", "/api/admin/settings/tts", map[string]any{"enabled": false}); code != http.StatusForbidden {
 		t.Fatalf("reader put settings = %d", code)
 	}

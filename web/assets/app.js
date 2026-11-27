@@ -10,7 +10,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[c]));
-  const tr = (s) => (window.I18N ? window.I18N.translate(String(s)) : String(s));
+  const tr = (s, params) => (window.I18N ? window.I18N.translate(String(s), params) : String(s));
 
   const THEMES = {
     paper: { pageBg: '#f7f4ec', ink: '#262119', link: '#2f5d50', sel: 'rgba(47,93,80,.2)', ui: '#f4f1ea' },
@@ -109,12 +109,12 @@
     }
     const res = await fetch(url, opts);
     if (!res.ok) {
-      let message = `请求失败（${res.status}）`;
+      let message = tr('error.requestFailedStatus', { status: res.status });
       try {
         const data = await res.json();
         if (data && data.error) message = data.error;
       } catch { /* 忽略 */ }
-      if (res.status === 401 && !url.startsWith('/api/auth/login') && !url.startsWith('/api/auth/setup')) {
+      if (res.status === 401) {
         handleSessionExpired();
       }
       throw new ApiError(message, res.status);
@@ -125,10 +125,7 @@
 
   const api = {
     authState: () => request('/api/auth/state'),
-    login: (body) => request('/api/auth/login', { method: 'POST', body }),
-    setup: (body) => request('/api/auth/setup', { method: 'POST', body }),
     logout: () => request('/api/auth/logout', { method: 'POST' }),
-    changePassword: (body) => request('/api/auth/password', { method: 'POST', body }),
     libraries: () => request('/api/libraries'),
     books: () => request('/api/books'),
     stats: () => request('/api/stats'),
@@ -151,7 +148,6 @@
     deleteLibrary: (id) => request(`/api/admin/libraries/${id}`, { method: 'DELETE' }),
     scanLibrary: (id) => request(`/api/admin/libraries/${id}/scan`, { method: 'POST' }),
     adminUsers: () => request('/api/admin/users'),
-    createUser: (body) => request('/api/admin/users', { method: 'POST', body }),
     updateUser: (id, body) => request(`/api/admin/users/${id}`, { method: 'PATCH', body }),
     deleteUser: (id) => request(`/api/admin/users/${id}`, { method: 'DELETE' }),
     ttsStatus: () => request('/api/tts/status'),
@@ -164,14 +160,9 @@
   const el = {
     authView: $('#authView'),
     authLang: $('#authLang'),
-    authForm: $('#authForm'),
     authEyebrow: $('#authEyebrow'),
     authTitle: $('#authTitle'),
     authDesc: $('#authDesc'),
-    authUser: $('#authUser'),
-    authPass: $('#authPass'),
-    authConfirmWrap: $('#authConfirmWrap'),
-    authConfirm: $('#authConfirm'),
     authError: $('#authError'),
     authSubmit: $('#authSubmit'),
     authHint: $('#authHint'),
@@ -207,7 +198,6 @@
     continueCard: $('#continueCard'),
     librarySwitch: $('#librarySwitch'),
 
-    userMenu: $('#userMenu'),
     userTheme: $('#userTheme'),
     userLang: $('#userLang'),
     avatarBtn: $('#avatarBtn'),
@@ -270,8 +260,6 @@
     searchMeta: $('#searchMeta'),
     searchResults: $('#searchResults'),
     annoBar: $('#annoBar'),
-    annoNote: $('#annoNote'),
-    annoCancel: $('#annoCancel'),
     noteScrim: $('#noteScrim'),
     noteTitle: $('#noteTitle'),
     noteQuote: $('#noteQuote'),
@@ -326,24 +314,17 @@
     ttsTestResult: $('#ttsTestResult'),
 
     dropOverlay: $('#dropOverlay'),
-    dropHint: $('#dropHint'),
     toasts: $('#toasts'),
     dialogScrim: $('#dialogScrim'),
     dialogTitle: $('#dialogTitle'),
     dialogText: $('#dialogText'),
     dialogOk: $('#dialogOk'),
     dialogCancel: $('#dialogCancel'),
-    passwordScrim: $('#passwordScrim'),
-    passwordForm: $('#passwordForm'),
-    pwCurrent: $('#pwCurrent'),
-    pwNew: $('#pwNew'),
-    pwConfirm: $('#pwConfirm'),
-    pwCancel: $('#pwCancel'),
   };
 
   const state = {
     user: null,
-    authMode: 'login',
+    oidcEnabled: false,
     view: 'auth',
     libraries: [],
     books: [],
@@ -420,10 +401,10 @@
 
   let dialogResolve = null;
 
-  function confirmDialog({ title = '确认操作', text = '', okText = '确定', danger = true } = {}) {
-    el.dialogTitle.textContent = title;
-    el.dialogText.textContent = text;
-    el.dialogOk.textContent = okText;
+  function confirmDialog({ title = 'common.confirmAction', text = '', okText = 'common.ok', danger = true } = {}) {
+    el.dialogTitle.textContent = tr(title);
+    el.dialogText.textContent = tr(text);
+    el.dialogOk.textContent = tr(okText);
     el.dialogOk.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
     el.dialogScrim.hidden = false;
     return new Promise((resolve) => { dialogResolve = resolve; });
@@ -461,7 +442,7 @@
     el.emptyHint.hidden = !user.isAdmin;
   }
 
-  async function showAuth(mode = 'login', message = '') {
+  async function showAuth(message = '') {
     await leaveReaderFullscreen();
     stopHeartbeat();
     stopAdminPoll();
@@ -472,7 +453,6 @@
     el.userPop.hidden = true;
 
     state.view = 'auth';
-    state.authMode = mode;
     state.folder = '';
     state.query = '';
     el.search.value = '';
@@ -484,60 +464,27 @@
     el.frame.src = 'about:blank';
     state.current = null;
 
-    const isSetup = mode === 'setup';
-    el.authEyebrow.textContent = isSetup ? '首次使用' : '欢迎回来';
-    el.authTitle.textContent = isSetup ? '创建管理员账号' : '登录书库';
-    el.authDesc.textContent = isSetup
-      ? '这是第一次启动。创建的管理员账号可以管理书库与用户。'
-      : '使用管理员为你创建的账号登录。';
-    el.authConfirmWrap.hidden = !isSetup;
-    el.authSubmit.textContent = isSetup ? '创建并进入' : '登录';
-    el.authHint.textContent = isSetup
-      ? '账号信息只保存在这台服务器上，请妥善保管密码。'
-      : '忘记密码？请联系管理员重置。';
-    el.authPass.autocomplete = isSetup ? 'new-password' : 'current-password';
-    el.authForm.reset();
+    el.authEyebrow.textContent = tr('auth.eyebrow');
+    el.authTitle.textContent = tr('auth.title');
+    el.authDesc.textContent = tr('auth.desc');
+    el.authSubmit.textContent = tr('auth.submit');
+    el.authHint.textContent = tr('auth.hint');
+    const target = location.pathname + location.hash;
+    if (state.oidcEnabled) {
+      el.authSubmit.href = '/api/auth/oidc/start?next=' + encodeURIComponent(target);
+    } else {
+      el.authSubmit.removeAttribute('href');
+    }
+    el.authSubmit.setAttribute('aria-disabled', String(!state.oidcEnabled));
     el.authError.hidden = true;
     el.authError.textContent = message;
     if (message) el.authError.hidden = false;
-    document.title = isSetup
-      ? (prefs.lang === 'zh' ? '初始化 · 墨阅' : 'Setup · Moyue')
-      : (prefs.lang === 'zh' ? '登录 · 墨阅' : 'Sign in · Moyue');
+    if (!state.oidcEnabled && !message) {
+      showAuthMessage(tr('auth.error.disabled'));
+    }
+    document.title = prefs.lang === 'zh' ? '登录 · 墨阅' : 'Sign in · Moyue';
     if (window.I18N) window.I18N.setLang(normalizeLang(prefs.lang));
-    setTimeout(() => el.authUser.focus(), 60);
-  }
-
-  async function submitAuth(event) {
-    event.preventDefault();
-    const username = el.authUser.value.trim();
-    const password = el.authPass.value;
-    const isSetup = state.authMode === 'setup';
-
-    if (!username || !password) {
-      showAuthMessage('请填写用户名和密码');
-      return;
-    }
-    if (isSetup) {
-      if (password.length < 6) return showAuthMessage('密码至少需要 6 个字符');
-      if (password !== el.authConfirm.value) return showAuthMessage('两次输入的密码不一致');
-    }
-
-    el.authSubmit.disabled = true;
-    el.authSubmit.textContent = isSetup ? '正在创建…' : '正在登录…';
-    try {
-      const data = isSetup
-        ? await api.setup({ username, password, displayName: username })
-        : await api.login({ username, password });
-      setUser(data.user);
-      el.authView.hidden = true;
-      history.replaceState(null, '', location.hash.startsWith('#/') ? location.hash : '/');
-      routeFromLocation();
-    } catch (err) {
-      showAuthMessage(err.message);
-    } finally {
-      el.authSubmit.disabled = false;
-      el.authSubmit.textContent = isSetup ? '创建并进入' : '登录';
-    }
+    setTimeout(() => el.authSubmit.focus(), 60);
   }
 
   function showAuthMessage(message) {
@@ -545,15 +492,39 @@
     el.authError.hidden = !message;
   }
 
+  function authErrorMessage(code) {
+    switch (code) {
+      case 'disabled':
+        return tr('auth.error.disabled');
+      case 'denied':
+        return tr('auth.error.denied');
+      case 'state':
+        return tr('auth.error.state');
+      case 'busy':
+        return tr('auth.error.busy');
+      case 'exchange':
+      case 'verify':
+      case 'account':
+      case 'session':
+        return tr('auth.error.verify');
+      default:
+        return tr('auth.error.generic');
+    }
+  }
+
   function handleSessionExpired() {
     if (state.view === 'auth') return;
     setUser(null);
-    showAuth('login', '登录状态已过期，请重新登录。');
+    showAuth(tr('auth.sessionExpired'));
     history.replaceState(null, '', '/');
   }
 
   async function logout() {
-    try { await api.logout(); } catch { /* 忽略 */ }
+    let redirectURL = '';
+    try {
+      const data = await api.logout();
+      redirectURL = data && data.redirectUrl ? data.redirectUrl : '';
+    } catch { /* 忽略，仍按本地退出处理 */ }
     setUser(null);
     state.books = [];
     state.libraries = [];
@@ -562,8 +533,12 @@
     state.query = '';
     el.search.value = '';
     el.userPop.hidden = true;
+    if (redirectURL) {
+      location.href = redirectURL;
+      return;
+    }
     history.replaceState(null, '', '/');
-    showAuth('login');
+    showAuth();
   }
 
   /* ============================ 书库 ============================ */
@@ -738,7 +713,7 @@
       return;
     }
     const lib = state.libraries.find((l) => l.id === state.selectedLibrary);
-    const rootName = state.selectedLibrary === 'all' ? tr('全部书库') : (lib?.name || tr('书库'));
+    const rootName = state.selectedLibrary === 'all' ? tr('shelf.allLibraries') : (lib?.name || tr('admin.libraries.tab'));
     const items = [`<button type="button" data-folder-nav="">${esc(rootName)}</button>`];
     let acc = '';
     const parts = state.folder.split('/').filter(Boolean);
@@ -771,11 +746,11 @@
     el.continueCard.hidden = false;
     el.continueCard.innerHTML = `
       <div class="continue-inner">
-        <div class="continue-cover" data-open="${book.id}" role="button" tabindex="0" aria-label="${esc(tr('继续阅读'))} ${esc(book.title)}">
+        <div class="continue-cover" data-open="${book.id}" role="button" tabindex="0" aria-label="${esc(tr('shelf.continueReading'))} ${esc(book.title)}">
           ${coverMarkup(book)}
         </div>
         <div class="continue-text">
-          <span class="eyebrow">${tr('继续阅读')} · ${relativeTime(book.progress.updatedAt)}</span>
+          <span class="eyebrow">${tr('shelf.continueReading')} · ${relativeTime(book.progress.updatedAt)}</span>
           <h2 title="${esc(book.title)}">${esc(book.title)}</h2>
           <p>${esc(book.creator || '佚名')} · 第 ${chapter} ${unit} · 已读 ${p}%</p>
           <div class="continue-bar"><i style="width:${clamp(p, 0, 100)}%"></i></div>
@@ -859,25 +834,25 @@
 
   function countBooks(n) {
     if (prefs.lang === 'en') return `${n} book${n === 1 ? '' : 's'}`;
-    return tr(`${n} 本`);
+    return tr('unit.bookCount', { n });
   }
 
   function countFound(n) {
     if (prefs.lang === 'en') return `Found ${n} book${n === 1 ? '' : 's'}`;
-    return tr(`找到 ${n} 本`);
+    return tr('search.foundBooks', { n });
   }
 
   function folderCard(f, i) {
     const count = countBooks(f.count);
     return `
       <article class="book folder-card" data-folder="${esc(f.path)}" style="--d:${Math.min(i * 26, 260)}ms">
-        <div class="cover folder-cover" role="button" tabindex="0" aria-label="${esc(tr('文件夹'))} ${esc(f.name)}">
+        <div class="cover folder-cover" role="button" tabindex="0" aria-label="${esc(tr('library.folder'))} ${esc(f.name)}">
           <svg class="icon folder-icon"><use href="#i-folder"/></svg>
           <span class="folder-count">${esc(count)}</span>
         </div>
         <div class="book-meta">
           <h3 title="${esc(f.name)}">${esc(f.name)}</h3>
-          <p>${esc(tr('文件夹'))} · ${esc(count)}</p>
+          <p>${esc(tr('library.folder'))} · ${esc(count)}</p>
         </div>
       </article>`;
   }
@@ -907,7 +882,7 @@
     el.shelfCount.textContent = q ? countFound(books.length) : countBooks(total);
     el.shelfTitle.textContent = state.folder
       ? state.folder.split('/').filter(Boolean).pop()
-      : tr('我的书架');
+      : tr('shelf.title');
     renderFolderTrail();
 
     const itemCount = folders.length + books.length;
@@ -922,25 +897,25 @@
       el.emptyUpload.hidden = inFolder || !canUpload || state.libraries.length === 0;
       el.emptyHint.hidden = inFolder || !canUpload || state.libraries.length === 0;
       if (inFolder) {
-        heading.textContent = tr('这个文件夹是空的');
-        desc.textContent = tr('返回上一级继续浏览。');
+        heading.textContent = tr('library.folderEmptyTitle');
+        desc.textContent = tr('library.folderEmptyDesc');
       } else if (state.books.length === 0) {
         if (state.user && state.user.isAdmin && state.libraries.length > 0) {
-          heading.textContent = tr('书架还空着');
-          desc.textContent = tr('把 EPUB 或 TXT 文件拖进窗口，或者点击下面按钮开始。');
+          heading.textContent = tr('shelf.emptyTitle');
+          desc.textContent = tr('shelf.emptyDesc');
         } else if (state.user && state.user.isAdmin) {
-          heading.textContent = tr('还没有书库');
-          desc.textContent = tr('先到管理控制台添加一个服务器目录，再导入书籍。');
+          heading.textContent = tr('shelf.noLibraries');
+          desc.textContent = tr('shelf.noLibraryAdmin');
         } else {
-          heading.textContent = tr('等待管理员分配书籍');
-          desc.textContent = tr('你的账号还没有可访问的书库，请联系管理员授权。');
+          heading.textContent = tr('shelf.waitingTitle');
+          desc.textContent = tr('shelf.waitingDesc');
         }
       } else if (q) {
-        heading.textContent = tr('没有匹配的书');
-        desc.textContent = tr('换一个关键词试试，或者清空搜索框。');
+        heading.textContent = tr('search.noMatchTitle');
+        desc.textContent = tr('search.noMatchDesc');
       } else {
-        heading.textContent = tr('这个书库还没有书');
-        desc.textContent = tr('切换其他书库，或让管理员扫描目录。');
+        heading.textContent = tr('library.emptyTitle');
+        desc.textContent = tr('library.emptyDesc');
       }
     }
 
@@ -953,7 +928,7 @@
 
   async function openAdmin({ updateHistory = true } = {}) {
     if (!state.user || !state.user.isAdmin) {
-      toast(tr('需要管理员权限'), { type: 'error' });
+      toast(tr('admin.required'), { type: 'error' });
       enterLibrary();
       return;
     }
@@ -968,7 +943,7 @@
     el.admin.hidden = false;
     el.frame.src = 'about:blank';
     state.current = null;
-    document.title = `${tr('管理控制台')} · ${brandName()}`;
+    document.title = `${tr('nav.admin')} · ${brandName()}`;
     if (updateHistory && location.hash !== '#/admin') {
       history.pushState(null, '', '#/admin');
     }
@@ -1025,15 +1000,15 @@
   }
 
   function scanText(scan) {
-    if (!scan) return tr('尚未扫描');
+    if (!scan) return tr('library.notScanned');
     if (scan.running) {
-      return `<span class="spinner-sm"></span>${esc(tr(`正在扫描… 已入库 ${scan.added || 0} 本`))}`;
+      return `<span class="spinner-sm"></span>${esc(tr('library.scanningAdded', { n: scan.added || 0 }))}`;
     }
     const parts = [];
-    if (scan.lastScan) parts.push(`${tr('上次扫描')} ${tr(relativeTime(scan.lastScan))}`);
-    parts.push(tr(`新增 ${scan.added || 0} · 更新 ${scan.updated || 0} · 跳过 ${scan.skipped || 0}`));
-    if (scan.removed) parts.push(tr(`移除 ${scan.removed}`));
-    if (scan.failed) parts.push(tr(`失败 ${scan.failed}`));
+    if (scan.lastScan) parts.push(`${tr('library.lastScan')} ${tr(relativeTime(scan.lastScan))}`);
+    parts.push(tr('library.scanCounts', { added: scan.added || 0, updated: scan.updated || 0, skipped: scan.skipped || 0 }));
+    if (scan.removed) parts.push(tr('library.scanRemoved', { n: scan.removed }));
+    if (scan.failed) parts.push(tr('library.scanFailed', { n: scan.failed }));
     return esc(parts.join(' · '));
   }
 
@@ -1083,12 +1058,13 @@
   }
 
   function renderAdminUsers() {
-    const libName = (id) => state.admin.libraries.find((l) => l.id === id)?.name || '未知书库';
+    const libName = (id) => state.admin.libraries.find((l) => l.id === id)?.name || tr('library.unknown');
     el.userList.innerHTML = state.admin.users.map((u) => {
       const libs = u.isAdmin
         ? '<span class="tag tag-accent">全部书库</span>'
         : (u.libraries || []).map((id) => `<span class="tag">${esc(libName(id))}</span>`).join('') || '<span class="tag">未分配</span>';
       const self = state.user && state.user.id === u.id;
+      const contact = [u.email, u.subject ? 'ID ' + u.subject : ''].filter(Boolean).join(' · ');
       return `<div class="admin-item">
         <div class="admin-item-main">
           <div class="admin-item-title">
@@ -1097,6 +1073,7 @@
             ${u.isAdmin ? '<span class="tag tag-accent">管理员</span>' : ''}
             ${self ? '<span class="tag">当前账号</span>' : ''}
           </div>
+          ${contact ? `<div class="admin-item-sub">${esc(contact)}</div>` : ''}
           <div class="admin-item-sub">${libs}</div>
         </div>
         <div class="admin-item-actions">
@@ -1104,30 +1081,25 @@
           ${self ? '' : `<button class="btn btn-ghost btn-sm" data-user-act="delete" data-id="${u.id}">删除</button>`}
         </div>
       </div>`;
-    }).join('') || '<div class="empty-list">还没有其他账号。</div>';
+    }).join('') || '<div class="empty-list">还没有账号。用户首次通过统一身份登录后会自动出现在这里。</div>';
   }
 
   function renderAdminFormChrome() {
     const editId = state.admin.editUserId;
     const u = editId ? state.admin.users.find((x) => x.id === editId) : null;
-    el.userFormTitle.textContent = tr(u ? '编辑用户' : '创建用户');
-    el.userFormDesc.textContent = u
-      ? tr(`修改 ${u.displayName || u.username} 的密码、角色与书库权限。`)
-      : tr('为家人或朋友创建独立账号，每个人的阅读进度互不影响。');
-    el.userForm.password.placeholder = tr(u ? '留空则不修改' : '至少 6 位');
-    el.userSubmit.textContent = tr(u ? '保存修改' : '创建用户');
-    el.userCancelEdit.hidden = !u;
+    el.userForm.hidden = !u;
+    if (!u) return;
+    el.userFormTitle.textContent = tr('admin.users.edit');
+    el.userFormDesc.textContent = tr('admin.users.editHint') + (u.displayName || u.username);
+    el.userSubmit.textContent = tr('common.saveChanges');
+    el.userCancelEdit.hidden = false;
   }
 
   function startUserEdit(id) {
     const u = state.admin.users.find((x) => x.id === id);
     if (!u) return;
     state.admin.editUserId = id;
-    el.userForm.username.value = u.username;
-    el.userForm.username.disabled = true;
     el.userForm.displayName.value = u.displayName || '';
-    el.userForm.password.value = '';
-    el.userForm.isAdmin.checked = !!u.isAdmin;
     $$('input[name="lib"]', el.userLibChecks).forEach((cb) => {
       cb.checked = (u.libraries || []).includes(cb.value);
     });
@@ -1138,42 +1110,27 @@
   function resetUserForm() {
     state.admin.editUserId = null;
     el.userForm.reset();
-    el.userForm.username.disabled = false;
     renderAdminFormChrome();
   }
 
   async function submitUserForm(event) {
     event.preventDefault();
+    if (!state.admin.editUserId) return;
     const fd = new FormData(el.userForm);
     const libs = $$('input[name="lib"]:checked', el.userLibChecks).map((cb) => cb.value);
-    const password = String(fd.get('password') || '');
-    const isEdit = !!state.admin.editUserId;
+    const payload = {
+      displayName: String(fd.get('displayName') || ''),
+      libraries: libs,
+    };
 
     el.userSubmit.disabled = true;
     try {
-      if (isEdit) {
-        const payload = {
-          displayName: String(fd.get('displayName') || ''),
-          isAdmin: fd.get('isAdmin') === 'on',
-          libraries: libs,
-        };
-        if (password) payload.password = password;
-        await api.updateUser(state.admin.editUserId, payload);
-        if (state.user && state.user.id === state.admin.editUserId && payload.displayName) {
-          state.user.displayName = payload.displayName;
-          setUser({ ...state.user });
-        }
-        toast('已保存用户信息');
-      } else {
-        await api.createUser({
-          username: String(fd.get('username') || '').trim(),
-          displayName: String(fd.get('displayName') || '').trim(),
-          password,
-          isAdmin: fd.get('isAdmin') === 'on',
-          libraries: libs,
-        });
-        toast(tr('已创建用户'));
+      await api.updateUser(state.admin.editUserId, payload);
+      if (state.user && state.user.id === state.admin.editUserId && payload.displayName) {
+        state.user.displayName = payload.displayName;
+        setUser({ ...state.user });
       }
+      toast('admin.users.saved');
       resetUserForm();
       await loadAdmin();
     } catch (err) {
@@ -1202,18 +1159,18 @@
     const t = state.admin.tts;
     if (!t) return;
     el.ttsApiKey.placeholder = state.admin.ttsClearKey
-      ? tr('保存后将清除服务器上的密钥')
-      : t.hasKey ? tr(`已保存 ${t.keyHint}，留空则不修改`) : tr('粘贴 API Key');
+      ? tr('tts.clearKeyHint')
+      : t.hasKey ? tr('tts.savedKeyHint', { hint: t.keyHint }) : tr('tts.pasteKey');
     el.ttsKeyState.className = 'tts-key-state' +
       (state.admin.ttsClearKey ? ' is-bad' : t.hasKey ? ' is-ok' : '');
     el.ttsKeyState.textContent = state.admin.ttsClearKey
-      ? tr('保存设置后将清除已配置的 API Key。')
+      ? tr('tts.clearKeyConfirm')
       : t.hasKey
-        ? tr(`已配置 API Key（${t.keyHint}），密钥只保存在服务器。`)
-        : tr('尚未保存 API Key，启用前需要先填写。');
+        ? tr('tts.keyConfigured', { hint: t.keyHint })
+        : tr('tts.noKeyHint');
     el.ttsClearKey.hidden = !t.hasKey || state.admin.ttsClearKey;
     const ready = !!t.enabled && !!t.hasKey;
-    el.ttsStateTag.textContent = ready ? tr('已启用') : t.hasKey ? tr('已配置 · 未启用') : tr('未配置');
+    el.ttsStateTag.textContent = ready ? tr('common.enabled') : t.hasKey ? tr('tts.configuredDisabled') : tr('tts.notConfigured');
     el.ttsStateTag.className = 'tag' + (ready ? ' tag-accent' : '');
   }
 
@@ -1269,7 +1226,7 @@
     e.preventDefault();
     const payload = ttsFormPayload();
     if (payload.enabled && !payload.apiKey && !state.admin.tts?.hasKey && !payload.clearKey) {
-      toast(tr('启用语音朗读前请填写 API Key'), { type: 'error' });
+      toast(tr('tts.keyRequired'), { type: 'error' });
       return;
     }
     el.ttsSave.disabled = true;
@@ -1277,7 +1234,7 @@
       const data = await api.saveAdminTTS(payload);
       state.admin.tts = data.tts;
       renderTTSSettings();
-      toast(tr(payload.enabled ? '语音朗读已保存并启用' : '语音朗读设置已保存'));
+      toast(tr(payload.enabled ? 'tts.savedEnabled' : 'tts.saved'));
       await loadTTSStatus();
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -1289,12 +1246,12 @@
   el.ttsTest.addEventListener('click', async () => {
     const payload = ttsFormPayload();
     if (!payload.apiKey && !state.admin.tts?.hasKey) {
-      toast(tr('请先填写 API Key'), { type: 'error' });
+      toast(tr('tts.enterKey'), { type: 'error' });
       return;
     }
     el.ttsTest.disabled = true;
     el.ttsTestResult.hidden = false;
-    el.ttsTestResult.innerHTML = `<span class="spinner-sm"></span> ${esc(tr('正在合成测试语音…'))}`;
+    el.ttsTestResult.innerHTML = `<span class="spinner-sm"></span> ${esc(tr('tts.testing'))}`;
     try {
       const res = await fetch('/api/admin/settings/tts/test', {
         method: 'POST',
@@ -1303,7 +1260,7 @@
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        let msg = tr(`测试失败（${res.status}）`);
+        let msg = tr('tts.testFailedStatus', { status: res.status });
         try {
           const data = await res.json();
           if (data.error) msg = data.error;
@@ -1313,16 +1270,16 @@
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       el.ttsTestResult.innerHTML =
-        `<strong>${esc(tr('测试成功'))}</strong> · ${esc(tr('正在播放示例语音。'))}`;
+        `<strong>${esc(tr('tts.testSuccess'))}</strong> · ${esc(tr('tts.playingSample'))}`;
       const audio = document.createElement('audio');
       audio.controls = true;
       audio.src = url;
       el.ttsTestResult.appendChild(audio);
       audio.play().catch(() => { /* 用户可手动点击播放 */ });
       audio.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-      toast(tr('语音合成连接正常'));
+      toast(tr('tts.testOk'));
     } catch (err) {
-      el.ttsTestResult.innerHTML = `<strong>${esc(tr('测试失败'))}</strong><br>${esc(err.message)}`;
+      el.ttsTestResult.innerHTML = `<strong>${esc(tr('tts.testFailed'))}</strong><br>${esc(err.message)}`;
     } finally {
       el.ttsTest.disabled = false;
     }
@@ -1584,7 +1541,7 @@
     const text = sel.toString();
     if (!text.trim()) return null;
     if (text.length > 2000) {
-      toast('选择内容过长，请分段划线', { type: 'error' });
+      toast('reader.selectionTooLong', { type: 'error' });
       return null;
     }
     const pre = doc.createRange();
@@ -1632,7 +1589,7 @@
       renderNotes();
       hideAnnoBar();
       clearFrameSelection();
-      toast('已添加划线');
+      toast('reader.highlightAdded');
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
     }
@@ -1691,7 +1648,7 @@
       renderNotes();
       hideAnnoBar();
       clearFrameSelection();
-      toast('笔记已保存');
+      toast('reader.noteSaved');
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
     }
@@ -1707,7 +1664,7 @@
       applyAnnotationsForChapter();
       renderNotes();
       hideAnnoBar();
-      toast('已删除笔记');
+      toast('reader.noteDeleted');
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
     }
@@ -1853,13 +1810,11 @@
     if (state.view === 'reader' && state.current) {
       document.title = `${state.current.title} · ${lang === 'zh' ? '墨阅' : 'Moyue'}`;
     } else if (state.view === 'admin') {
-      document.title = `${tr('管理控制台')} · ${brandName()}`;
+      document.title = `${tr('nav.admin')} · ${brandName()}`;
     } else if (state.view === 'library') {
       document.title = lang === 'zh' ? '墨阅 · 私人书库' : 'Moyue · Private Library';
     } else if (state.view === 'auth') {
-      document.title = lang === 'zh'
-        ? (state.authMode === 'setup' ? '初始化 · 墨阅' : '登录 · 墨阅')
-        : (state.authMode === 'setup' ? 'Setup · Moyue' : 'Sign in · Moyue');
+      document.title = lang === 'zh' ? '登录 · 墨阅' : 'Sign in · Moyue';
     }
     // 页码、朗读状态等是运行时拼出来的，切语言后重新生成一次。
     if (state.view === 'reader' && state.current) {
@@ -1987,8 +1942,8 @@
     const hint = el.modeSeg.parentElement?.querySelector('.setting-hint');
     if (hint) {
       hint.textContent = tr(prefs.mode === 'spread' && !isSpreadWide()
-        ? '当前窗口较窄，双页会先以单页显示；放大窗口后自动恢复双页。'
-        : '双页仅在大屏生效；选择上下滚动时不会分栏。');
+        ? 'reader.layoutNarrow'
+        : 'reader.layoutHint');
     }
 
     el.sizeRange.value = String(prefs.size);
@@ -2024,17 +1979,22 @@
     const paged = isPaginated() && state.page.active;
     el.ttsBtn.hidden = !isTextBook(book);
     if (audio) {
-      el.rChapter.textContent = tr(`有声书 · ${chapter.title}`);
+      el.rChapter.textContent = tr('reader.audiobookTitle', { title: chapter.title });
     } else if (fixed) {
       el.rChapter.textContent = tr(pageLabel(book));
     } else if (paged) {
-      el.rChapter.textContent = tr(`第 ${state.chapter + 1} / ${total} 节 · 第 ${state.page.page + 1} / ${state.page.pages} 页 · ${chapter.title}`);
+      el.rChapter.textContent = tr('reader.positionTitle', {
+        chapter: state.chapter + 1, chapters: total,
+        page: state.page.page + 1, pages: state.page.pages, title: chapter.title,
+      });
     } else {
-      el.rChapter.textContent = tr(`第 ${state.chapter + 1} / ${total} 节 · ${chapter.title}`);
+      el.rChapter.textContent = tr('reader.chapterTitle', {
+        chapter: state.chapter + 1, chapters: total, title: chapter.title,
+      });
     }
     const pageMode = paged || fixed;
-    const prevLabel = tr(audio ? '上一段' : pageMode ? '上一页' : '上一章');
-    const nextLabel = tr(audio ? '下一段' : pageMode ? '下一页' : '下一章');
+    const prevLabel = tr(audio ? 'reader.prevParagraph' : pageMode ? 'reader.prevPage' : 'reader.prevChapter');
+    const nextLabel = tr(audio ? 'reader.nextParagraph' : pageMode ? 'reader.nextPage' : 'reader.nextChapter');
     el.prevBtn.querySelector('.btn-label').textContent = prevLabel;
     el.nextBtn.querySelector('.btn-label').textContent = nextLabel;
     el.prevBtn.title = prevLabel;
@@ -2114,7 +2074,7 @@
     try { seen = localStorage.getItem('moyue.immersionHint') === '1'; } catch { /* 忽略 */ }
     if (seen) return;
     try { localStorage.setItem('moyue.immersionHint', '1'); } catch { /* 忽略 */ }
-    toast(tr('轻点页面中央可显示或隐藏菜单'), { duration: 3200 });
+    toast(tr('reader.tapHint'), { duration: 3200 });
   }
 
   function hideReaderChrome({ hint = false } = {}) {
@@ -2331,7 +2291,7 @@
       return;
     }
     if (data.type === 'moyue-audio-error') {
-      toast(tr(data.message || '音频播放失败'), { type: 'error' });
+      toast(tr(data.message || 'audio.playFailed'), { type: 'error' });
       return;
     }
     if (data.type === 'moyue-pdf-ready') {
@@ -2341,7 +2301,7 @@
       if (data.pages > 0) {
         state.pdf.pages = data.pages;
       } else {
-        toast(tr('PDF 加载失败') + (data.error ? '：' + data.error : ''), { type: 'error' });
+        toast(tr('pdf.loadFailed') + (data.error ? '：' + data.error : ''), { type: 'error' });
         return;
       }
       postPDFTheme();
@@ -2949,7 +2909,7 @@
     } catch {
       state.lastSaved = '';
     }
-    toast(tr('已读完'));
+    toast(tr('book.finished'));
   }
 
   function nextChapter() {
@@ -2958,7 +2918,7 @@
     const step = chapterStep();
     if (state.chapter + step > book.chapters.length - 1) {
       if (book.progress?.finished && state.fraction >= 1) {
-        toast(tr('已读完'));
+        toast(tr('book.finished'));
         return;
       }
       const atContentEnd = isPaginated() || isFixed(book) || state.fraction >= 0.985;
@@ -2998,9 +2958,9 @@
     if (!el.markBtn) return;
     const marked = !!bookmarkAtCurrent();
     el.markBtn.classList.toggle('is-on', marked);
-    const label = marked ? tr('取消书签 (B)') : tr('书签 (B)');
+    const label = marked ? tr('reader.removeBookmarkShortcut') : tr('reader.bookmarkShortcut');
     el.markBtn.title = label;
-    el.markBtn.setAttribute('aria-label', marked ? tr('取消书签') : tr('书签'));
+    el.markBtn.setAttribute('aria-label', marked ? tr('reader.removeBookmark') : tr('reader.bookmarks'));
   }
 
   async function toggleBookmark() {
@@ -3014,7 +2974,7 @@
         book.bookmarks = (book.bookmarks || []).filter((m) => m.id !== existing.id);
         renderBookmarks();
         updateBookmarkState();
-        toast('已取消书签');
+        toast('toast.bookmarkRemoved');
         return;
       }
       const chapter = book.chapters[state.chapter];
@@ -3027,7 +2987,7 @@
       book.bookmarks = [mark, ...(book.bookmarks || [])];
       renderBookmarks();
       updateBookmarkState();
-      toast('已添加书签');
+      toast('toast.bookmarkAdded');
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
     } finally {
@@ -3080,7 +3040,7 @@
   function syncFullscreenEntry() {
     if (!el.fullscreenEntry) return;
     const on = !!document.fullscreenElement;
-    const label = tr(on ? '退出全屏阅读' : '全屏阅读');
+    const label = tr(on ? 'reader.exitFullscreen' : 'reader.fullscreen');
     if (el.fullscreenEntryLabel) el.fullscreenEntryLabel.textContent = label;
     el.fullscreenEntry.querySelector('use')?.setAttribute('href', on ? '#i-shrink' : '#i-expand');
     el.fullscreenEntry.title = label;
@@ -3104,7 +3064,7 @@
       // iOS PWA 与部分内嵌浏览器不支持元素全屏，退化为隐藏上下菜单的沉浸阅读。
       closeDrawers();
       hideReaderChrome({ hint: true });
-      toast(tr('当前环境无法进入系统全屏，已切换沉浸阅读'), { duration: 3200 });
+      toast(tr('reader.fullscreenUnavailable'), { duration: 3200 });
     }
   }
 
@@ -3148,7 +3108,7 @@
   function updateTTSButton() {
     const ok = ttsEnabled();
     el.ttsBtn.classList.toggle('is-off', !ok);
-    el.ttsBtn.title = ok ? tr('语音朗读 (R)') : tr('语音朗读（管理员尚未配置）');
+    el.ttsBtn.title = ok ? tr('tts.toggleShortcut') : tr('tts.notConfiguredByAdmin');
     el.ttsBtn.setAttribute('aria-label', el.ttsBtn.title);
   }
 
@@ -3337,7 +3297,7 @@
     const key = `${prefs.ttsVoice}\u0000${text}`;
     if (t.cache.has(key)) return t.cache.get(key);
     const book = state.current;
-    if (!book) throw new Error('没有打开的书');
+    if (!book) throw new Error(tr('error.noOpenBook'));
     const res = await fetch(`/api/books/${book.id}/tts`, {
       method: 'POST',
       credentials: 'same-origin',
@@ -3345,7 +3305,7 @@
       body: JSON.stringify({ chapter: state.chapter, text, voice: prefs.ttsVoice }),
     });
     if (!res.ok) {
-      let message = `语音合成失败（${res.status}）`;
+      let message = tr('tts.failedStatus', { status: res.status });
       try {
         const data = await res.json();
         if (data && data.error) message = data.error;
@@ -3354,7 +3314,7 @@
       throw new Error(message);
     }
     const blob = await res.blob();
-    if (!blob.size) throw new Error('语音服务返回了空音频');
+    if (!blob.size) throw new Error(tr('error.emptyAudio'));
     const url = URL.createObjectURL(blob);
     if (!state.tts.active) {
       URL.revokeObjectURL(url);
@@ -3392,17 +3352,20 @@
     const total = t.sentences.length;
     const chunk = t.sentences[t.index];
     const partInfo = chunk && chunk.parts.length > 1
-      ? ` · 第 ${Math.min(t.part + 1, chunk.parts.length)} / ${chunk.parts.length} 句`
+      ? tr('tts.sentenceSuffix', {
+        sentence: Math.min(t.part + 1, chunk.parts.length),
+        sentences: chunk.parts.length,
+      })
       : '';
     if (t.loading) {
-      el.ttsStatus.textContent = tr(`正在合成第 ${Math.min(t.index + 1, total)} / ${total} 段…`);
+      el.ttsStatus.textContent = tr('tts.synthesizing', { part: Math.min(t.index + 1, total), parts: total });
     } else if (t.playing) {
-      el.ttsStatus.textContent = tr(`正在朗读第 ${t.index + 1} / ${total} 段${partInfo}`);
+      el.ttsStatus.textContent = tr('tts.reading', { part: t.index + 1, parts: total }) + partInfo;
     } else {
-      el.ttsStatus.textContent = tr(`已暂停 · 第 ${Math.min(t.index + 1, total)} / ${total} 段${partInfo}`);
+      el.ttsStatus.textContent = tr('tts.paused', { part: Math.min(t.index + 1, total), parts: total }) + partInfo;
     }
     el.ttsPlayIcon.querySelector('use').setAttribute('href', t.playing ? '#i-pause' : '#i-play');
-    el.ttsPlay.title = tr(t.playing ? '暂停' : '继续朗读');
+    el.ttsPlay.title = tr(t.playing ? 'tts.pause' : 'tts.resume');
     el.ttsPlay.setAttribute('aria-label', el.ttsPlay.title);
   }
 
@@ -3496,7 +3459,7 @@
       });
       audio.addEventListener('error', () => {
         if (!t.active || token !== t.token) return;
-        toast('音频播放失败，请检查浏览器是否允许自动播放', { type: 'error' });
+        toast('error.audioAutoplay', { type: 'error' });
         t.loading = false;
         t.playing = false;
         renderTTSBar();
@@ -3525,7 +3488,7 @@
       t.loading = false;
       t.playing = false;
       renderTTSBar();
-      toast(err.message || '语音合成失败', { type: 'error' });
+      toast(err.message || 'error.ttsFailed', { type: 'error' });
     }
   }
 
@@ -3535,7 +3498,7 @@
     t.sentences = collectTTSSentences();
     t.chapter = state.chapter;
     if (!t.sentences.length) {
-      toast('这一章没有可朗读的文字', { type: 'error' });
+      toast('error.ttsNoText', { type: 'error' });
       stopTTS();
       return;
     }
@@ -3557,7 +3520,7 @@
     const book = state.current;
     if (!book) return stopTTS();
     if (state.chapter >= book.chapters.length - 1) {
-      toast('已朗读到本书结尾');
+      toast('toast.ttsEnd');
       stopTTS();
       return;
     }
@@ -3645,17 +3608,17 @@
 
   async function startTTS() {
     if (!isTextBook(state.current)) {
-      toast('当前格式暂不支持语音朗读', { type: 'error' });
+      toast('error.ttsUnsupported', { type: 'error' });
       return;
     }
     if (!state.tts.status) await loadTTSStatus();
     if (!ttsEnabled()) {
-      toast('管理员还没有配置语音朗读服务', { type: 'error' });
+      toast('error.ttsNotConfigured', { type: 'error' });
       return;
     }
     const sentences = collectTTSSentences();
     if (!sentences.length) {
-      toast('当前章节没有可朗读的文字', { type: 'error' });
+      toast('error.ttsNoText', { type: 'error' });
       return;
     }
     const start = findTTSStartPosition(sentences, ttsStartOffset());
@@ -3781,13 +3744,13 @@
       : (libs[0]?.id || '');
     el.uploadLib.innerHTML = libs.length
       ? libs.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join('')
-      : '<option value="">默认书库</option>';
+      : `<option value="">${esc(tr('library.default'))}</option>`;
     el.uploadLib.value = current;
   }
 
   function openUploadDialog(files) {
     if (!state.user?.isAdmin) {
-      toast('只有管理员可以导入书籍', { type: 'error' });
+      toast('error.adminOnlyImport', { type: 'error' });
       return;
     }
     fillUploadLibraries();
@@ -3811,12 +3774,12 @@
 
   function uploadStatusText(item) {
     switch (item.status) {
-      case 'uploading': return tr(`正在上传 ${Math.round(item.progress * 100)}%`);
-      case 'parsing': return tr('校验并解析文件…');
-      case 'done': return item.title ? tr(`已导入《${item.title}》`) : tr('已导入');
-      case 'duplicate': return item.title ? tr(`已在书架中：《${item.title}》`) : tr('已在书架中');
-      case 'error': return tr(item.error || '上传失败');
-      default: return tr('等待上传');
+      case 'uploading': return tr('upload.progress', { percent: Math.round(item.progress * 100) });
+      case 'parsing': return tr('upload.validating');
+      case 'done': return item.title ? tr('upload.doneTitle', { title: item.title }) : tr('upload.imported');
+      case 'duplicate': return item.title ? tr('upload.duplicateTitle', { title: item.title }) : tr('upload.duplicate');
+      case 'error': return tr(item.error || 'upload.failed');
+      default: return tr('upload.waiting');
     }
   }
 
@@ -3865,18 +3828,18 @@
     el.uploadTotalBar.style.width = `${percent}%`;
     el.uploadPercent.textContent = items.length ? `${Math.round(percent)}%` : '';
     if (!items.length) {
-      el.uploadSummary.textContent = tr('还没有选择文件');
+      el.uploadSummary.textContent = tr('upload.noneSelected');
     } else if (state.upload.running) {
       const active = items.find((i) => i.status === 'parsing' || i.status === 'uploading');
       el.uploadSummary.textContent = active && active.status === 'parsing'
-        ? tr(`正在解析《${active.file.name}》…`)
-        : tr(`正在导入 ${done} / ${items.length} 个文件`);
+        ? tr('upload.parsing', { title: active.file.name })
+        : tr('upload.importing', { done, total: items.length });
     } else if (done + failed === items.length) {
       el.uploadSummary.textContent = failed
-        ? tr(`完成 ${done} 个 · 失败 ${failed} 个`)
-        : tr(`已完成 ${done} 个文件`);
+        ? tr('upload.finished', { done, failed })
+        : tr('upload.completed', { n: done });
     } else {
-      el.uploadSummary.textContent = tr(`已选择 ${items.length} 个文件 · ${fmtBytes(totalBytes)}`);
+      el.uploadSummary.textContent = tr('upload.selected', { n: items.length, size: fmtBytes(totalBytes) });
     }
 
     const pending = items.some((i) => i.status === 'pending' || i.status === 'error');
@@ -3918,7 +3881,7 @@
         title: '',
       });
     }
-    if (rejected) toast('已跳过不支持或超过 200 MB 的文件', { type: 'error' });
+    if (rejected) toast('toast.uploadSkipped', { type: 'error' });
     if (duplicated) toast(`已跳过 ${duplicated} 个重复文件`);
     renderUploadList();
   }
@@ -3952,7 +3915,7 @@
         try { data = JSON.parse(xhr.responseText || '{}'); } catch { /* 忽略 */ }
         if (xhr.status === 401) {
           item.status = 'error';
-          item.error = '登录已过期';
+          item.error = 'error.loginExpired';
           resolve();
           handleSessionExpired();
           return;
@@ -3973,7 +3936,7 @@
         state.upload.xhr = null;
         item.status = 'error';
         item.progress = 0;
-        item.error = '网络中断，请重试';
+        item.error = 'error.networkInterrupted';
         renderUploadItem(item);
         resolve();
       });
@@ -4086,7 +4049,7 @@
     prefs.mode = btn.dataset.mode;
     applyPrefs();
     if (prefs.mode === 'spread' && !isSpreadWide()) {
-      toast('窗口较窄，双页会以单页显示', { duration: 2600 });
+      toast('toast.narrowWindow', { duration: 2600 });
     }
   });
 
@@ -4129,7 +4092,7 @@
     Object.assign(prefs, DEFAULT_PREFS);
     applyPrefs();
     applyLang();
-    toast('已恢复默认阅读设置');
+    toast('toast.settingsReset');
   });
 
   el.authLang.addEventListener('change', () => {
@@ -4147,7 +4110,6 @@
 
   /* ============================ 书架事件 ============================ */
 
-  el.authForm.addEventListener('submit', submitAuth);
 
   el.librarySwitch.addEventListener('click', (e) => {
     const chip = e.target.closest('[data-lib]');
@@ -4265,7 +4227,7 @@
         if (!ok) return;
         try {
           await api.resetProgress(id);
-          toast('已标记为未读');
+          toast('toast.markedUnread');
           loadLibrary({ silent: true });
         } catch (err) {
           if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4279,7 +4241,7 @@
         if (!ok) return;
         try {
           await api.remove(id);
-          toast('已删除');
+          toast('toast.deleted');
           loadLibrary({ silent: true });
         } catch (err) {
           if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4351,36 +4313,7 @@
       openSessions();
     } else if (act === 'install') {
       installApp();
-    } else if (act === 'password') {
-      el.passwordScrim.hidden = false;
-      el.passwordForm.reset();
-      setTimeout(() => el.pwCurrent.focus(), 50);
     }
-  });
-
-  /* ============================ 密码 ============================ */
-
-  el.passwordForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const current = el.pwCurrent.value;
-    const next = el.pwNew.value;
-    if (next.length < 6) return toast('新密码至少需要 6 个字符', { type: 'error' });
-    if (next !== el.pwConfirm.value) return toast('两次输入的新密码不一致', { type: 'error' });
-    try {
-      await api.changePassword({ currentPassword: current, newPassword: next });
-      el.passwordScrim.hidden = true;
-      el.passwordForm.reset();
-      toast('密码已修改');
-    } catch (err) {
-      if (err.status !== 401) toast(err.message, { type: 'error' });
-    }
-  });
-  el.pwCancel.addEventListener('click', () => {
-    el.passwordScrim.hidden = true;
-    el.passwordForm.reset();
-  });
-  el.passwordScrim.addEventListener('click', (e) => {
-    if (e.target === el.passwordScrim) el.passwordScrim.hidden = true;
   });
 
   /* ============================ 管理台事件 ============================ */
@@ -4433,7 +4366,7 @@
       });
       el.libForm.reset();
       syncLibKindFields();
-      toast('书库已添加，正在扫描');
+      toast('admin.libraries.added');
       await loadAdmin();
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4452,7 +4385,7 @@
       btn.disabled = true;
       try {
         await api.scanLibrary(id);
-        toast('开始扫描「' + lib.name + '」');
+        toast(tr('library.scanningName', { name: lib.name }));
         await loadAdmin();
       } catch (err) {
         if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4466,7 +4399,7 @@
       if (!ok) return;
       try {
         await api.deleteLibrary(id);
-        toast('书库已删除');
+        toast('toast.libraryDeleted');
         await loadAdmin();
       } catch (err) {
         if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4497,7 +4430,7 @@
       if (!ok) return;
       try {
         await api.deleteUser(id);
-        toast('账号已删除');
+        toast('toast.accountDeleted');
         await loadAdmin();
       } catch (err) {
         if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4597,7 +4530,7 @@
     if (!ok) return;
     try {
       await api.revokeOtherSessions();
-      toast('已退出其它设备');
+      toast('toast.othersSignedOut');
       await loadSessions();
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4613,7 +4546,7 @@
         handleSessionExpired();
         return;
       }
-      toast('已撤销该设备');
+      toast('toast.deviceRevoked');
       await loadSessions();
     } catch (err) {
       if (err.status !== 401) toast(err.message, { type: 'error' });
@@ -4668,7 +4601,7 @@
         state.current.bookmarks = (state.current.bookmarks || []).filter((m) => m.id !== del.dataset.del);
         renderBookmarks();
         updateBookmarkState();
-        toast('已删除书签');
+        toast('toast.bookmarkRemoved');
       } catch (err) {
         if (err.status !== 401) toast(err.message, { type: 'error' });
       }
@@ -4941,7 +4874,7 @@
     window.addEventListener('appinstalled', () => {
       deferredInstall = null;
       el.installEntry.hidden = true;
-      toast('已安装到桌面');
+      toast('toast.installed');
     });
   }
 
@@ -4957,14 +4890,14 @@
       return;
     }
     if (isIOSDevice()) {
-      toast('在 Safari 底部点「分享」，再选「添加到主屏幕」', { duration: 6000 });
+      toast('toast.installHintIOS', { duration: 6000 });
       return;
     }
-    toast('可在浏览器菜单中选择「安装应用」或「添加到主屏幕」');
+    toast('toast.installHint');
   }
 
-  window.addEventListener('offline', () => toast('网络已断开，恢复连接后可继续保存进度', { type: 'error' }));
-  window.addEventListener('online', () => toast('网络已恢复'));
+  window.addEventListener('offline', () => toast('toast.offline', { type: 'error' }));
+  window.addEventListener('online', () => toast('toast.backOnline'));
 
   async function boot() {
     applyAppTheme();
@@ -4974,6 +4907,14 @@
     syncSettingsUI();
     try {
       const s = await api.authState();
+      state.oidcEnabled = !!s.oidcEnabled;
+      const params = new URLSearchParams(location.search);
+      const authError = params.get('auth_error');
+      const loggedOut = params.get('logged_out') === '1';
+      const ssoSkipped = params.get('sso') === '0';
+      if (authError || loggedOut || ssoSkipped) {
+        history.replaceState(null, '', location.pathname + location.hash);
+      }
       if (s.user) {
         setUser(s.user);
         const match = location.hash.match(/^#\/read\/([\w-]+)/);
@@ -4984,13 +4925,16 @@
         } else {
           enterLibrary({ updateHistory: false });
         }
-      } else if (s.needsSetup) {
-        showAuth('setup');
+      } else if (s.oidcEnabled && !authError && !loggedOut && !ssoSkipped) {
+        // 先用 prompt=none 检查身份提供商是否已有会话：
+        // 已登录会直接回调进入书架，未登录则回到本地登录页。
+        location.replace('/api/auth/oidc/start?silent=1&next=' + encodeURIComponent(location.pathname + location.hash));
+        return;
       } else {
-        showAuth('login');
+        showAuth(authError ? authErrorMessage(authError) : loggedOut ? tr('auth.signedOut') : '');
       }
     } catch (err) {
-      showAuth('login', '无法连接服务器：' + err.message);
+      showAuth(tr('error.cannotConnectDetail', { error: err.message }));
     }
   }
 

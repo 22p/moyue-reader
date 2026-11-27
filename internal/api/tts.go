@@ -20,7 +20,7 @@ const ttsSettingKey = "tts"
 
 const (
 	ttsMaxRunes     = 1000
-	ttsTestSentence = "你好，这是墨阅的语音朗读测试。海风吹过书页，故事从这里开始。"
+	ttsTestSentence = "Hello, this is a text-to-speech test from Moyue. The sea breeze turns the pages, and the story begins here."
 	ttsRateLimit    = 20
 	ttsRateWindow   = time.Minute
 )
@@ -55,7 +55,7 @@ func (s *Server) loadTTSSettings() ttsSettings {
 		return cfg
 	}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		slog.Warn("语音朗读配置损坏，使用默认值", "err", err)
+		slog.Warn("corrupted TTS settings; using defaults", "err", err)
 		return defaultTTSSettings()
 	}
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
@@ -116,7 +116,7 @@ func ttsView(cfg ttsSettings) ttsAdminView {
 	if n := len(cfg.APIKey); n > 4 {
 		view.KeyHint = "…" + cfg.APIKey[n-4:]
 	} else if n > 0 {
-		view.KeyHint = "已配置"
+		view.KeyHint = "Configured"
 	}
 	return view
 }
@@ -140,7 +140,7 @@ type ttsSettingsRequest struct {
 func (s *Server) adminPutTTS(w http.ResponseWriter, r *http.Request) {
 	var req ttsSettingsRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	cur := s.loadTTSSettings()
@@ -164,7 +164,7 @@ func (s *Server) adminPutTTS(w http.ResponseWriter, r *http.Request) {
 		cfg.Model = tts.DefaultModel
 	}
 	if utf8.RuneCountInString(cfg.Model) > 120 {
-		writeError(w, http.StatusBadRequest, "模型名称过长")
+		writeError(w, http.StatusBadRequest, "model name is too long")
 		return
 	}
 	cfg.Voice = strings.TrimSpace(req.Voice)
@@ -172,24 +172,24 @@ func (s *Server) adminPutTTS(w http.ResponseWriter, r *http.Request) {
 		cfg.Voice = tts.DefaultVoice
 	}
 	if !tts.ValidVoice(cfg.Provider, cfg.Voice) {
-		writeError(w, http.StatusBadRequest, "音色不受支持")
+		writeError(w, http.StatusBadRequest, "unsupported voice")
 		return
 	}
 	if req.ClearKey {
 		cfg.APIKey = ""
 	} else if key := strings.TrimSpace(req.APIKey); key != "" {
 		if len(key) > 512 {
-			writeError(w, http.StatusBadRequest, "API Key 过长")
+			writeError(w, http.StatusBadRequest, "API key is too long")
 			return
 		}
 		cfg.APIKey = key
 	}
 	if cfg.Enabled && cfg.APIKey == "" {
-		writeError(w, http.StatusBadRequest, "启用语音朗读前请填写 API Key")
+		writeError(w, http.StatusBadRequest, "enter an API key before enabling text-to-speech")
 		return
 	}
 	if err := s.saveTTSSettings(cfg); err != nil {
-		writeError(w, http.StatusInternalServerError, "保存设置失败")
+		writeError(w, http.StatusInternalServerError, "failed to save settings")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tts": ttsView(cfg)})
@@ -199,7 +199,7 @@ func (s *Server) adminPutTTS(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminTestTTS(w http.ResponseWriter, r *http.Request) {
 	var req ttsSettingsRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	cfg := s.loadTTSSettings()
@@ -223,7 +223,7 @@ func (s *Server) adminTestTTS(w http.ResponseWriter, r *http.Request) {
 		cfg.APIKey = ""
 	}
 	if cfg.APIKey == "" {
-		writeError(w, http.StatusBadRequest, "请先填写 API Key")
+		writeError(w, http.StatusBadRequest, "enter an API key first")
 		return
 	}
 	if err := tts.ValidateURL(cfg.BaseURL); err != nil {
@@ -231,7 +231,7 @@ func (s *Server) adminTestTTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !tts.ValidVoice(cfg.Provider, cfg.Voice) {
-		writeError(w, http.StatusBadRequest, "音色不受支持")
+		writeError(w, http.StatusBadRequest, "unsupported voice")
 		return
 	}
 
@@ -239,8 +239,8 @@ func (s *Server) adminTestTTS(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	data, mime, _, err := s.ttsClient.Synthesize(ctx, cfg.config(), ttsTestSentence, cfg.Voice)
 	if err != nil {
-		slog.Warn("语音朗读测试失败", "err", err)
-		writeError(w, http.StatusBadGateway, "语音合成失败："+err.Error())
+		slog.Warn("text-to-speech test failed", "err", err)
+		writeError(w, http.StatusBadGateway, "speech synthesis failed: "+err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", mime)
@@ -272,35 +272,35 @@ func ttsSpeakable(bookType string) bool {
 // ttsChapterText 提取当前章节的纯文本，用于限制读者只能朗读书籍正文。
 func (s *Server) ttsChapterText(b *store.Book, chapter int) (string, error) {
 	if chapter < 0 {
-		return "", fmt.Errorf("章节不存在")
+		return "", fmt.Errorf("chapter not found")
 	}
 	switch b.Type {
 	case "txt":
 		tb, err := s.parseTXT(b)
 		if err != nil || chapter >= len(tb.Chapters) {
-			return "", fmt.Errorf("章节不存在")
+			return "", fmt.Errorf("chapter not found")
 		}
 		ch := tb.Chapters[chapter]
 		if ch.Start < 0 || ch.End > len(tb.Text) || ch.Start >= ch.End {
-			return "", fmt.Errorf("章节不存在")
+			return "", fmt.Errorf("chapter not found")
 		}
 		return ch.Title + "\n" + tb.Text[ch.Start:ch.End], nil
 	case "fb2":
 		fb, err := s.parseFB2(b)
 		if err != nil || chapter >= len(fb.Chapters) {
-			return "", fmt.Errorf("章节不存在")
+			return "", fmt.Errorf("chapter not found")
 		}
 		return htmlToText(fb.Chapters[chapter].HTML), nil
 	case "mobi", "azw", "azw3", "prc":
 		_, chapters, err := s.parseKindle(b)
 		if err != nil || chapter >= len(chapters) {
-			return "", fmt.Errorf("章节不存在")
+			return "", fmt.Errorf("chapter not found")
 		}
 		return htmlToText(chapters[chapter].HTML), nil
 	case "epub":
 		eb, err := s.parseEPUB(b)
 		if err != nil || chapter >= len(eb.Chapters) {
-			return "", fmt.Errorf("章节不存在")
+			return "", fmt.Errorf("chapter not found")
 		}
 		ar, err := epub.OpenArchive(s.bookPath(b))
 		if err != nil {
@@ -313,7 +313,7 @@ func (s *Server) ttsChapterText(b *store.Book, chapter int) (string, error) {
 		}
 		return htmlToText(string(raw)), nil
 	default:
-		return "", fmt.Errorf("不支持的格式")
+		return "", fmt.Errorf("unsupported format")
 	}
 }
 
@@ -352,7 +352,7 @@ func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ttsSpeakable(b.Type) {
-		writeError(w, http.StatusBadRequest, "当前格式暂不支持语音朗读")
+		writeError(w, http.StatusBadRequest, "text-to-speech is not supported for this format")
 		return
 	}
 	var req struct {
@@ -361,12 +361,12 @@ func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
 		Voice   string `json:"voice"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	text := strings.TrimSpace(req.Text)
 	if text == "" {
-		writeError(w, http.StatusBadRequest, "朗读文本为空")
+		writeError(w, http.StatusBadRequest, "no text to read aloud")
 		return
 	}
 	if utf8.RuneCountInString(text) > ttsMaxRunes {
@@ -374,21 +374,21 @@ func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
 	}
 	// 限流放在解析章节之前，避免无效文本反复触发 EPUB 解包等重操作。
 	if !s.allowTTS(u.ID) {
-		writeError(w, http.StatusTooManyRequests, "朗读请求过于频繁，请稍后再试")
+		writeError(w, http.StatusTooManyRequests, "too many read-aloud requests; try again later")
 		return
 	}
 	chapterText, err := s.ttsChapterText(b, req.Chapter)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "章节不存在")
+		writeError(w, http.StatusBadRequest, "chapter not found")
 		return
 	}
 	if !strings.Contains(normalizeTTS(chapterText), normalizeTTS(text)) {
-		writeError(w, http.StatusBadRequest, "朗读文本不属于当前章节")
+		writeError(w, http.StatusBadRequest, "text does not belong to the current chapter")
 		return
 	}
 	cfg := s.loadTTSSettings()
 	if !cfg.Enabled || cfg.APIKey == "" {
-		writeError(w, http.StatusServiceUnavailable, "管理员尚未配置语音朗读")
+		writeError(w, http.StatusServiceUnavailable, "the administrator has not configured text-to-speech")
 		return
 	}
 	voice := strings.TrimSpace(req.Voice)
@@ -403,8 +403,8 @@ func (s *Server) ttsSpeak(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	data, mime, cached, err := s.ttsClient.Synthesize(ctx, cfg.config(), text, voice)
 	if err != nil {
-		slog.Warn("语音合成失败", "book", b.ID, "err", err)
-		writeError(w, http.StatusBadGateway, "语音合成失败，请稍后重试；管理员可在管理台测试语音服务")
+		slog.Warn("speech synthesis failed", "book", b.ID, "err", err)
+		writeError(w, http.StatusBadGateway, "speech synthesis failed; try again later. An administrator can test the service in the admin console")
 		return
 	}
 	w.Header().Set("Content-Type", mime)

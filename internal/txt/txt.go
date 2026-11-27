@@ -35,7 +35,7 @@ type Book struct {
 }
 
 // ErrInvalid 表示文件内容不可用。
-var ErrInvalid = errors.New("TXT 文件为空或无法识别编码")
+var ErrInvalid = errors.New("TXT file is empty or its encoding is not recognized")
 
 var (
 	reCNChapter  = regexp.MustCompile(`^(?:正文[\s　]*)?第[\s　]*[0-9０-９零〇一二三四五六七八九十百千万两]{1,12}[\s　]*[章节回卷集部篇话幕][^\n]{0,30}$`)
@@ -57,7 +57,7 @@ func ParseFile(path string) (*Book, error) {
 		return nil, err
 	}
 	if info.Size() > 64<<20 {
-		return nil, errors.New("TXT 文件超过 64MB")
+		return nil, errors.New("TXT file exceeds the 64 MB limit")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -236,7 +236,7 @@ func Split(text string) []Chapter {
 	if first := heads[0].pos; strings.TrimSpace(text[:first]) != "" {
 		pre := strings.TrimSpace(text[:first])
 		if utf8.RuneCountInString(pre) >= 10 && !metadataOnly(pre) {
-			chapters = append(chapters, Chapter{Title: "前言", Start: 0, End: first})
+			chapters = append(chapters, Chapter{Title: "Preface", Start: 0, End: first})
 		}
 	}
 	for i, h := range heads {
@@ -339,7 +339,7 @@ func metadata(filename, text string) (string, string) {
 	}
 	title = strings.TrimSpace(strings.Trim(title, "《》"))
 	if title == "" {
-		title = "未命名"
+		title = "Untitled"
 	}
 	if utf8.RuneCountInString(title) > 80 {
 		title = string([]rune(title)[:80])
@@ -354,7 +354,7 @@ func chunk(text string) []Chapter {
 		return nil
 	}
 	if total < 20000 {
-		return []Chapter{{Title: "全文", Start: 0, End: len(text)}}
+		return []Chapter{{Title: "Full text", Start: 0, End: len(text)}}
 	}
 	const target = 9000
 	var chapters []Chapter
@@ -395,9 +395,9 @@ func chunk(text string) []Chapter {
 
 func sectionTitle(n int) string {
 	if n == 1 {
-		return "正文"
+		return "Body"
 	}
-	return "正文 · " + strconv.Itoa(n)
+	return "Body · " + strconv.Itoa(n)
 }
 
 // HTML 把纯文本段落转换为安全的 HTML。

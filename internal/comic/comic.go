@@ -23,10 +23,10 @@ var imageExts = map[string]bool{
 }
 
 // ErrEmpty 表示压缩包里没有图片。
-var ErrEmpty = errors.New("压缩包中没有找到图片")
+var ErrEmpty = errors.New("no images found in the archive")
 
 // ErrUnsupported 表示不是 CBZ/CBR。
-var ErrUnsupported = errors.New("不支持的漫画格式")
+var ErrUnsupported = errors.New("unsupported comic format")
 
 // List 返回按自然顺序排序的图片页。
 func List(path string) ([]Page, error) {
@@ -99,7 +99,7 @@ func Read(path, name string) ([]byte, error) {
 				return io.ReadAll(io.LimitReader(rc, 64<<20))
 			}
 		}
-		return nil, errors.New("页面不存在")
+		return nil, errors.New("page not found")
 	case ".cbr":
 		files, err := rardecode.List(path)
 		if err != nil {
@@ -115,7 +115,7 @@ func Read(path, name string) ([]byte, error) {
 				return io.ReadAll(io.LimitReader(rc, 64<<20))
 			}
 		}
-		return nil, errors.New("页面不存在")
+		return nil, errors.New("page not found")
 	default:
 		return nil, ErrUnsupported
 	}

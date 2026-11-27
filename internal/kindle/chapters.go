@@ -60,9 +60,9 @@ func (b *Book) SplitChapters(bookID string) []Chapter {
 		title := chapterTitle(part)
 		if title == "" {
 			if i == 0 {
-				title = "前言"
+				title = "Preface"
 			} else {
-				title = fmt.Sprintf("第 %d 节", len(out)+1)
+				title = fmt.Sprintf("Section %d", len(out)+1)
 			}
 		}
 		part = rewriteImages(part, bookID)

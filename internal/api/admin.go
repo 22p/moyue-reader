@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"moyue/internal/auth"
 	"moyue/internal/store"
 )
 
@@ -92,7 +91,7 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -106,13 +105,13 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 		req.Kind = "local"
 	}
 	if req.Name == "" || len([]rune(req.Name)) > 40 {
-		writeError(w, http.StatusBadRequest, "书库名称不能为空且不超过 40 个字符")
+		writeError(w, http.StatusBadRequest, "library name is required and must be at most 40 characters")
 		return
 	}
 	switch req.Type {
 	case "mixed", "ebook", "epub", "txt", "comic", "pdf", "kindle", "audio":
 	default:
-		writeError(w, http.StatusBadRequest, "书库类型不受支持")
+		writeError(w, http.StatusBadRequest, "unsupported library type")
 		return
 	}
 	var lib *store.Library
@@ -120,27 +119,27 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 	case "webdav":
 		raw := strings.TrimRight(strings.TrimSpace(req.URL), "/")
 		if raw == "" {
-			writeError(w, http.StatusBadRequest, "请填写 WebDAV 地址")
+			writeError(w, http.StatusBadRequest, "WebDAV URL is required")
 			return
 		}
 		u, err := url.Parse(raw)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			writeError(w, http.StatusBadRequest, "WebDAV 地址必须以 http:// 或 https:// 开头")
+			writeError(w, http.StatusBadRequest, "WebDAV URL must start with http:// or https://")
 			return
 		}
 		if u.User != nil {
-			writeError(w, http.StatusBadRequest, "请把用户名和密码填在单独字段中")
+			writeError(w, http.StatusBadRequest, "put the username and password in the dedicated fields")
 			return
 		}
 		for _, l := range s.store.ListLibraries() {
 			if l.Kind == "webdav" && strings.EqualFold(strings.TrimRight(l.RemoteURL, "/"), raw) {
-				writeError(w, http.StatusConflict, "该 WebDAV 地址已经被书库「"+l.Name+"」使用")
+				writeError(w, http.StatusConflict, "WebDAV URL is already used by library \""+l.Name+"\"")
 				return
 			}
 		}
 		cache := filepath.Join(filepath.Dir(s.store.Path()), "webdav", store.BookID("webdav", raw))
 		if err := os.MkdirAll(cache, 0o755); err != nil {
-			writeError(w, http.StatusInternalServerError, "创建 WebDAV 缓存目录失败")
+			writeError(w, http.StatusInternalServerError, "failed to create WebDAV cache directory")
 			return
 		}
 		lib = &store.Library{
@@ -154,32 +153,32 @@ func (s *Server) createLibrary(w http.ResponseWriter, r *http.Request) {
 		}
 	case "local":
 		if req.Path == "" {
-			writeError(w, http.StatusBadRequest, "请填写服务器上的目录路径")
+			writeError(w, http.StatusBadRequest, "server directory path is required")
 			return
 		}
 		abs, err := filepath.Abs(req.Path)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "目录路径无效")
+			writeError(w, http.StatusBadRequest, "invalid directory path")
 			return
 		}
 		info, err := os.Stat(abs)
 		if err != nil || !info.IsDir() {
-			writeError(w, http.StatusBadRequest, "目录不存在或不是文件夹："+abs)
+			writeError(w, http.StatusBadRequest, "directory does not exist or is not a folder: "+abs)
 			return
 		}
 		for _, l := range s.store.ListLibraries() {
 			if l.Kind != "webdav" && strings.EqualFold(filepath.Clean(l.Path), filepath.Clean(abs)) {
-				writeError(w, http.StatusConflict, "该目录已经被书库「"+l.Name+"」使用")
+				writeError(w, http.StatusConflict, "directory is already used by library \""+l.Name+"\"")
 				return
 			}
 		}
 		lib = &store.Library{Name: req.Name, Path: abs, Type: req.Type, Kind: "local"}
 	default:
-		writeError(w, http.StatusBadRequest, "书库来源不受支持")
+		writeError(w, http.StatusBadRequest, "unsupported library source")
 		return
 	}
 	if err := s.store.AddLibrary(lib); err != nil {
-		writeError(w, errStatus(err), "创建书库失败")
+		writeError(w, errStatus(err), "failed to create library")
 		return
 	}
 	s.startScan(lib.ID)
@@ -190,11 +189,11 @@ func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	lib, err := s.store.GetLibrary(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "书库不存在")
+		writeError(w, http.StatusNotFound, "library not found")
 		return
 	}
 	if err := s.store.DeleteLibrary(id); err != nil {
-		writeError(w, errStatus(err), "删除书库失败")
+		writeError(w, errStatus(err), "failed to delete library")
 		return
 	}
 	if lib.Kind == "webdav" {
@@ -207,7 +206,7 @@ func (s *Server) deleteLibrary(w http.ResponseWriter, r *http.Request) {
 func (s *Server) scanLibraryHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, err := s.store.GetLibrary(id); err != nil {
-		writeError(w, http.StatusNotFound, "书库不存在")
+		writeError(w, http.StatusNotFound, "library not found")
 		return
 	}
 	status := s.startScan(id)
@@ -225,103 +224,27 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"users": out})
 }
 
-func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username    string   `json:"username"`
-		Password    string   `json:"password"`
-		DisplayName string   `json:"displayName"`
-		IsAdmin     bool     `json:"isAdmin"`
-		Libraries   []string `json:"libraries"`
-	}
-	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
-		return
-	}
-	req.Username = strings.TrimSpace(req.Username)
-	if err := auth.ValidateUsername(req.Username); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := auth.ValidatePassword(req.Password); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	libs, err := s.validLibraries(req.Libraries)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	hash, err := auth.HashPassword(req.Password)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "密码处理失败")
-		return
-	}
-	display := strings.TrimSpace(req.DisplayName)
-	if display == "" {
-		display = req.Username
-	}
-	u := &store.User{
-		Username:     req.Username,
-		DisplayName:  display,
-		PasswordHash: hash,
-		IsAdmin:      req.IsAdmin,
-		Libraries:    libs,
-	}
-	if err := s.store.CreateUser(u); err != nil {
-		writeError(w, errStatus(err), "创建用户失败")
-		return
-	}
-	writeJSON(w, http.StatusCreated, map[string]any{"user": viewUser(u)})
-}
-
 func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	target, err := s.store.GetUser(id)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "用户不存在")
+	if _, err := s.store.GetUser(id); err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
 		return
 	}
 	var req struct {
 		DisplayName *string   `json:"displayName"`
-		Password    *string   `json:"password"`
-		IsAdmin     *bool     `json:"isAdmin"`
 		Libraries   *[]string `json:"libraries"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	var libs []string
+	var err error
 	if req.Libraries != nil {
 		libs, err = s.validLibraries(*req.Libraries)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	var hash string
-	if req.Password != nil && *req.Password != "" {
-		if err := auth.ValidatePassword(*req.Password); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		hash, err = auth.HashPassword(*req.Password)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "密码处理失败")
-			return
-		}
-	}
-
-	if req.IsAdmin != nil && !*req.IsAdmin && target.IsAdmin {
-		admins := 0
-		for _, u := range s.store.ListUsers() {
-			if u.IsAdmin {
-				admins++
-			}
-		}
-		if admins <= 1 {
-			writeError(w, http.StatusBadRequest, "至少需要保留一个管理员")
 			return
 		}
 	}
@@ -333,37 +256,14 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 				u.DisplayName = name
 			}
 		}
-		if hash != "" {
-			u.PasswordHash = hash
-		}
-		if req.IsAdmin != nil {
-			u.IsAdmin = *req.IsAdmin
-		}
 		if req.Libraries != nil {
 			u.Libraries = libs
 		}
 		return nil
 	})
 	if err != nil {
-		writeError(w, errStatus(err), "修改用户失败")
+		writeError(w, errStatus(err), "failed to update user")
 		return
-	}
-	if hash != "" {
-		var sessionErr error
-		current := currentUser(r)
-		if current != nil && current.ID == id {
-			if cookie, err := r.Cookie(sessionCookie); err == nil && cookie.Value != "" {
-				sessionErr = s.store.DeleteOtherSessions(id, hashToken(cookie.Value))
-			} else {
-				sessionErr = s.store.DeleteUserSessions(id)
-			}
-		} else {
-			sessionErr = s.store.DeleteUserSessions(id)
-		}
-		if sessionErr != nil {
-			writeError(w, http.StatusInternalServerError, "密码已修改，但清理旧登录会话失败")
-			return
-		}
 	}
 	updated, _ := s.store.GetUser(id)
 	writeJSON(w, http.StatusOK, map[string]any{"user": viewUser(updated)})
@@ -372,11 +272,11 @@ func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if current := currentUser(r); current != nil && current.ID == id {
-		writeError(w, http.StatusBadRequest, "不能删除当前登录的账号")
+		writeError(w, http.StatusBadRequest, "cannot delete the signed-in account")
 		return
 	}
 	if err := s.store.DeleteUser(id); err != nil {
-		writeError(w, errStatus(err), "删除用户失败")
+		writeError(w, errStatus(err), "failed to delete user")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -391,7 +291,7 @@ func (s *Server) validLibraries(ids []string) ([]string, error) {
 	seen := map[string]bool{}
 	for _, id := range ids {
 		if !known[id] {
-			return nil, &badRequest{"书库不存在：" + id}
+			return nil, &badRequest{"library not found: " + id}
 		}
 		if !seen[id] {
 			seen[id] = true

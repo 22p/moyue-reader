@@ -20,6 +20,7 @@ import (
 	"moyue/internal/epub"
 	"moyue/internal/fb2"
 	"moyue/internal/kindle"
+	"moyue/internal/oidc"
 	"moyue/internal/store"
 	"moyue/internal/tts"
 	"moyue/internal/txt"
@@ -75,6 +76,8 @@ type Options struct {
 	// TrustProxy 表示服务部署在受信任的反向代理之后，可读取
 	// X-Forwarded-Proto / X-Forwarded-For / X-Forwarded-Host。
 	TrustProxy bool
+	// OIDC 是统一身份登录客户端；为 nil 时登录页会提示未配置。
+	OIDC *oidc.Client
 }
 
 // Server 聚合依赖并提供 http.Handler。
@@ -90,6 +93,7 @@ type Server struct {
 	sw            []byte
 	offline       []byte
 	ttsClient     *tts.Client
+	oidc          *oidc.Client
 
 	mu          sync.RWMutex
 	epubCache   map[string]cachedEPUB
@@ -100,9 +104,8 @@ type Server struct {
 	scanStatus  map[string]*ScanStatus
 	scanMu      sync.Mutex
 
-	setupMu     sync.Mutex
-	loginMu     sync.Mutex
-	loginFails  map[string]*loginBucket
+	oidcMu      sync.Mutex
+	oidcStates  map[string]*oidcLoginState
 	ttsMu       sync.Mutex
 	ttsUses     map[string]*loginBucket
 	webdavMu    sync.Mutex
@@ -156,13 +159,14 @@ func New(st *store.Store, booksDir string, web fs.FS, opts ...Options) (*Server,
 		sw:            sw,
 		offline:       offline,
 		ttsClient:     tts.NewClient(filepath.Join(filepath.Dir(st.Path()), "tts")),
+		oidc:          cfg.OIDC,
+		oidcStates:    map[string]*oidcLoginState{},
 		epubCache:     map[string]cachedEPUB{},
 		txtCache:      map[string]cachedTXT{},
 		fb2Cache:      map[string]cachedFB2{},
 		kindleCache:   map[string]cachedKindle{},
 		comicCache:    map[string]cachedComic{},
 		scanStatus:    map[string]*ScanStatus{},
-		loginFails:    map[string]*loginBucket{},
 		ttsUses:       map[string]*loginBucket{},
 		webdavLocks:   map[string]chan struct{}{},
 	}, nil
@@ -176,13 +180,13 @@ func (s *Server) Handler() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "time": time.Now().Format(time.RFC3339)})
 	})
 
-	// 认证
+	// 认证（OIDC 授权码登录）
 	mux.HandleFunc("GET /api/auth/state", s.authState)
-	mux.HandleFunc("POST /api/auth/setup", s.setup)
-	mux.HandleFunc("POST /api/auth/login", s.login)
+	mux.HandleFunc("GET /api/auth/oidc/start", s.oidcStart)
+	mux.HandleFunc("GET /api/auth/oidc/callback", s.oidcCallback)
+	mux.HandleFunc("GET /api/auth/oidc/logout/callback", s.oidcLogoutCallback)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/auth/me", s.protect(s.me))
-	mux.HandleFunc("POST /api/auth/password", s.protect(s.changePassword))
 	mux.HandleFunc("GET /api/auth/sessions", s.protect(s.listSessions))
 	mux.HandleFunc("DELETE /api/auth/sessions/{id}", s.protect(s.revokeSession))
 	mux.HandleFunc("POST /api/auth/sessions/revoke-others", s.protect(s.revokeOtherSessions))
@@ -223,7 +227,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/libraries/{id}", s.requireAdmin(s.deleteLibrary))
 	mux.HandleFunc("POST /api/admin/libraries/{id}/scan", s.requireAdmin(s.scanLibraryHandler))
 	mux.HandleFunc("GET /api/admin/users", s.requireAdmin(s.adminUsers))
-	mux.HandleFunc("POST /api/admin/users", s.requireAdmin(s.createUser))
 	mux.HandleFunc("PATCH /api/admin/users/{id}", s.requireAdmin(s.updateUser))
 	mux.HandleFunc("DELETE /api/admin/users/{id}", s.requireAdmin(s.deleteUser))
 	mux.HandleFunc("GET /api/admin/settings/tts", s.requireAdmin(s.adminGetTTS))
@@ -232,7 +235,7 @@ func (s *Server) Handler() http.Handler {
 
 	assets, err := fs.Sub(s.web, "assets")
 	if err != nil {
-		slog.Error("加载静态资源失败", "err", err)
+		slog.Error("failed to load static assets", "err", err)
 	} else {
 		fileServer := http.FileServer(http.FS(assets))
 		mux.Handle("GET /assets/", http.StripPrefix("/assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +265,7 @@ func (s *Server) Handler() http.Handler {
 
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			writeError(w, http.StatusNotFound, "接口不存在")
+			writeError(w, http.StatusNotFound, "endpoint not found")
 			return
 		}
 		if r.URL.Path != "/" && path.Ext(r.URL.Path) != "" {
@@ -283,13 +286,13 @@ func (s *Server) protect(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cookie, err := r.Cookie(sessionCookie)
 		if err != nil || cookie.Value == "" {
-			writeError(w, http.StatusUnauthorized, "请先登录")
+			writeError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
 		key := hashToken(cookie.Value)
 		sess, ok := s.store.GetSession(key)
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "登录已过期")
+			writeError(w, http.StatusUnauthorized, "session expired")
 			return
 		}
 		if time.Since(sess.LastSeen) > 5*time.Minute {
@@ -297,7 +300,7 @@ func (s *Server) protect(next http.HandlerFunc) http.HandlerFunc {
 		}
 		user, err := s.store.GetUser(sess.UserID)
 		if err != nil {
-			writeError(w, http.StatusUnauthorized, "账号不存在")
+			writeError(w, http.StatusUnauthorized, "account not found")
 			return
 		}
 		ctx := context.WithValue(r.Context(), userKey, user)
@@ -308,7 +311,7 @@ func (s *Server) protect(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return s.protect(func(w http.ResponseWriter, r *http.Request) {
 		if u := currentUser(r); u == nil || !u.IsAdmin {
-			writeError(w, http.StatusForbidden, "需要管理员权限")
+			writeError(w, http.StatusForbidden, "administrator permission required")
 			return
 		}
 		next(w, r)
@@ -343,7 +346,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 		return
 	}
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("写出 JSON 失败", "err", err)
+		slog.Error("failed to write JSON response", "err", err)
 	}
 }
 
@@ -367,7 +370,7 @@ func (s *Server) csrfGuard(next http.Handler) http.Handler {
 			if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
 				u, err := url.Parse(origin)
 				if err != nil || u.Host == "" || !s.sameHost(u.Host, r) {
-					writeError(w, http.StatusForbidden, "跨站请求已被拒绝")
+					writeError(w, http.StatusForbidden, "cross-site request rejected")
 					return
 				}
 			}
@@ -429,8 +432,8 @@ func recoverer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				slog.Error("请求处理 panic", "err", rec, "stack", string(debug.Stack()))
-				writeError(w, http.StatusInternalServerError, "服务器内部错误")
+				slog.Error("request handler panic", "err", rec, "stack", string(debug.Stack()))
+				writeError(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)

@@ -12,7 +12,8 @@
 
 - 后端 Go 1.27，SQLite 使用 `modernc.org/sqlite`，不要引入 CGO 依赖
 - 前端是 `web/` 下的原生 HTML / CSS / JS，通过 `go:embed` 打包；不要引入构建步骤或 CDN
-- 用户可见文案必须同步 `web/assets/i18n.js` 的中 / 英 / 日 / 韩词典；动态拼接的文案用 `tr()` 包一层
+- 用户可见文案必须同步 `web/assets/i18n.js` 的中 / 英 / 日 / 韩词典，键使用 `nav.home` 这类语义命名；动态拼接的文案用 `tr()` 包一层
+- Go 代码中的错误、日志与默认标题一律写英文；常见服务端错误在 `i18n.js` 的 `EN_SERVER` 中映射回语义键，由前端按界面语言显示
 - 数据结构变更必须通过 `internal/store/migrations.go` 递增 `schemaVersion`，并补迁移测试
 - 书库路径、阅读进度、书签、批注按账号隔离；接口权限检查不可绕过
 - 修改分页、朗读、上传、扫描等功能后，用真实书籍做浏览器回归，而不是只看编译通过
@@ -26,9 +27,9 @@
 
 ## 实现要点
 
-**认证**：PBKDF2-SHA256（标准库 `crypto/pbkdf2`），登录创建 32 字节随机 token，服务端只存哈希；Cookie 为 `HttpOnly` + `SameSite=Lax`，30 天有效，TLS 下带 `Secure`；同一 IP 10 分钟内失败 10 次会被暂时拒绝。放在反向代理后请加 `-trust-proxy`，否则真实 IP 与 HTTPS 判断不准确。
+**认证**：只支持 OIDC 授权码登录（带 PKCE 与 nonce）。启动时用 `-oidc-discovery` 读取发现文档，回调时用 JWKS 校验 ID Token，按 `issuer + sub` 自动建号并同步 `-oidc-admins` 中的管理员标记（只匹配 sub）；本地不保存密码。OIDC 参数可用 `MOYUE_OIDC_*` 环境变量提供。会话仍是 32 字节随机 token，服务端只存哈希；Cookie 为 `HttpOnly` + `SameSite=Lax`，30 天有效，TLS 下带 `Secure`。登录与注销回调地址按请求的协议/Host 自动推导；放在反向代理后请加 `-trust-proxy`，否则真实 IP、HTTPS 与回调地址判断不准确。会话会保存 ID Token 以支持 RP 主动注销的 `id_token_hint`。已配置 OIDC 时前端先用 `prompt=none` 静默检查身份提供商会话，已有会话直接进入书架，未登录才展示本地登录页。
 
-**权限**：书籍访问始终经过「书籍 → 书库 → 用户授权」校验；管理员绕过书库授权；章节、页面、PDF、封面、下载、进度、书签接口均做同一套检查。
+**权限**：书籍访问始终经过「书籍 → 书库 → 用户授权」校验；管理员绕过书库授权；名为「默认书库」的书库对所有登录用户开放（每次登录自动补齐）；章节、页面、PDF、封面、下载、进度、书签接口均做同一套检查。
 
 **扫描**：`filepath.WalkDir` 递归目录，跳过隐藏目录；已有记录在 `size + mtime` 未变时直接跳过；文件变化后重新解析并保留 `AddedAt` 与阅读进度。完整扫描结束后用 `PruneBooks` 删除磁盘上已不存在的书籍记录；本地书库在 `GET /api/books` 时也会做一次轻量存在性检查。PDF 用 pdfcpu 读页数，漫画用 zip / rardecode 列页，FB2 / MOBI / AZW3 分别由纯 Go 解析器分章。
 

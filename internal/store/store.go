@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,11 +26,11 @@ import (
 
 var (
 	// ErrNotFound 表示对象不存在。
-	ErrNotFound = errors.New("对象不存在")
+	ErrNotFound = errors.New("object not found")
 	// ErrConflict 表示用户名/书库名等唯一字段冲突。
-	ErrConflict = errors.New("已存在同名记录")
+	ErrConflict = errors.New("a record with the same name already exists")
 	// ErrLastAdmin 表示不能删除最后一个管理员。
-	ErrLastAdmin = errors.New("至少需要保留一个管理员")
+	ErrLastAdmin = errors.New("at least one administrator must remain")
 )
 
 // Progress 是某个用户在某本书上的阅读进度。
@@ -87,13 +88,16 @@ type Library struct {
 
 // User 是一个账号。阅读进度、书签与统计按 user_id 单独存表。
 type User struct {
-	ID           string    `json:"id"`
-	Username     string    `json:"username"`
-	DisplayName  string    `json:"displayName"`
-	PasswordHash string    `json:"passwordHash"`
-	IsAdmin      bool      `json:"isAdmin"`
-	Libraries    []string  `json:"libraries"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID          string    `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"displayName"`
+	IsAdmin     bool      `json:"isAdmin"`
+	Libraries   []string  `json:"libraries"`
+	OIDCIssuer  string    `json:"oidcIssuer"`
+	OIDCSubject string    `json:"oidcSubject"`
+	Email       string    `json:"email"`
+	AvatarURL   string    `json:"avatarUrl"`
+	CreatedAt   time.Time `json:"createdAt"`
 }
 
 // Session 是登录会话（key 为 token 的 SHA-256）。
@@ -102,6 +106,7 @@ type Session struct {
 	UserID    string    `json:"userId"`
 	UserAgent string    `json:"userAgent"`
 	IP        string    `json:"ip"`
+	IDToken   string    `json:"-"`
 	CreatedAt time.Time `json:"createdAt"`
 	LastSeen  time.Time `json:"lastSeen"`
 	ExpiresAt time.Time `json:"expiresAt"`
@@ -130,8 +135,11 @@ CREATE TABLE IF NOT EXISTS users (
     id            TEXT PRIMARY KEY,
     username      TEXT NOT NULL COLLATE NOCASE UNIQUE,
     display_name  TEXT NOT NULL DEFAULT '',
-    password_hash TEXT NOT NULL DEFAULT '',
     is_admin      INTEGER NOT NULL DEFAULT 0,
+    oidc_issuer   TEXT NOT NULL DEFAULT '',
+    oidc_subject  TEXT NOT NULL DEFAULT '',
+    email         TEXT NOT NULL DEFAULT '',
+    avatar_url    TEXT NOT NULL DEFAULT '',
     created_at    INTEGER NOT NULL
 );
 
@@ -166,6 +174,7 @@ CREATE INDEX IF NOT EXISTS idx_books_checksum ON books(library_id, checksum);
 CREATE TABLE IF NOT EXISTS sessions (
     key        TEXT PRIMARY KEY,
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    id_token   TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
 );
@@ -239,18 +248,18 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// 数据库内含密码哈希与会话，仅允许当前用户读写。
+	// 数据库内含账号、会话与阅读数据，仅允许当前用户读写。
 	_ = os.Chmod(dbPath, 0o600)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("初始化数据库：%w", err)
+		return nil, fmt.Errorf("initialize database: %w", err)
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {
 		_ = os.Chmod(dbPath+suffix, 0o600)
 	}
 	if err := s.migrate(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("升级数据库：%w", err)
+		return nil, fmt.Errorf("upgrade database: %w", err)
 	}
 	if _, err := db.Exec(`DELETE FROM sessions WHERE expires_at <= ?`, nowMS()); err != nil {
 		db.Close()
@@ -319,7 +328,7 @@ func (s *Store) CountUsers() int {
 
 // ListUsers 返回按创建时间排序的用户。
 func (s *Store) ListUsers() []*User {
-	rows, err := s.db.Query(`SELECT id, username, display_name, password_hash, is_admin, created_at
+	rows, err := s.db.Query(`SELECT id, username, display_name, is_admin, oidc_issuer, oidc_subject, email, avatar_url, created_at
 FROM users ORDER BY created_at, rowid`)
 	if err != nil {
 		return []*User{}
@@ -345,7 +354,7 @@ FROM users ORDER BY created_at, rowid`)
 
 // GetUser 按 ID 查找用户。
 func (s *Store) GetUser(id string) (*User, error) {
-	row := s.db.QueryRow(`SELECT id, username, display_name, password_hash, is_admin, created_at
+	row := s.db.QueryRow(`SELECT id, username, display_name, is_admin, oidc_issuer, oidc_subject, email, avatar_url, created_at
 FROM users WHERE id = ?`, id)
 	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -360,7 +369,7 @@ FROM users WHERE id = ?`, id)
 
 // GetUserByName 按用户名（忽略大小写）查找用户。
 func (s *Store) GetUserByName(name string) (*User, error) {
-	row := s.db.QueryRow(`SELECT id, username, display_name, password_hash, is_admin, created_at
+	row := s.db.QueryRow(`SELECT id, username, display_name, is_admin, oidc_issuer, oidc_subject, email, avatar_url, created_at
 FROM users WHERE username = ? COLLATE NOCASE`, name)
 	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -381,7 +390,8 @@ func scanUser(row scanner) (*User, error) {
 	var u User
 	var admin int
 	var created int64
-	if err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.PasswordHash, &admin, &created); err != nil {
+	if err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &admin,
+		&u.OIDCIssuer, &u.OIDCSubject, &u.Email, &u.AvatarURL, &created); err != nil {
 		return nil, err
 	}
 	u.IsAdmin = admin != 0
@@ -391,9 +401,12 @@ func scanUser(row scanner) (*User, error) {
 }
 
 func (s *Store) userLibraries(userID string) []string {
-	rows, err := s.db.Query(`SELECT ul.library_id FROM user_libraries ul
-JOIN libraries l ON l.id = ul.library_id
-WHERE ul.user_id = ? ORDER BY l.created_at, l.name`, userID)
+	// The default library is open to every user without a user_libraries row.
+	// "默认书库" is kept for databases created before the name was translated to English.
+	rows, err := s.db.Query(`SELECT l.id FROM libraries l
+LEFT JOIN user_libraries ul ON ul.library_id = l.id AND ul.user_id = ?
+WHERE ul.user_id IS NOT NULL OR l.name IN ('默认书库', 'Default Library')
+ORDER BY l.created_at, l.name`, userID)
 	if err != nil {
 		return []string{}
 	}
@@ -426,9 +439,11 @@ func (s *Store) CreateUser(u *User) error {
 	}
 	defer tx.Rollback()
 
-	_, err = tx.Exec(`INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at)
-VALUES (?, ?, ?, ?, ?, ?)`,
-		u.ID, u.Username, u.DisplayName, u.PasswordHash, boolInt(u.IsAdmin), toMS(u.CreatedAt))
+	_, err = tx.Exec(`INSERT INTO users
+(id, username, display_name, is_admin, oidc_issuer, oidc_subject, email, avatar_url, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.Username, u.DisplayName, boolInt(u.IsAdmin),
+		u.OIDCIssuer, u.OIDCSubject, u.Email, u.AvatarURL, toMS(u.CreatedAt))
 	if err != nil {
 		if isUniqueErr(err) {
 			return ErrConflict
@@ -441,6 +456,240 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 	return tx.Commit()
 }
 
+// OIDCIdentity 是身份提供商返回的登录身份。Subject 在同一 Issuer 下稳定。
+type OIDCIdentity struct {
+	Issuer            string
+	Subject           string
+	Email             string
+	DisplayName       string
+	PreferredUsername string
+	AvatarURL         string
+	Admin             bool
+}
+
+// UpsertOIDCUser 按 Issuer + Subject 查找账号，不存在时自动创建。
+// 管理员标记每次登录都以服务端白名单为准；默认书库对所有用户开放，
+// 每次登录都会补齐，其余书库权限只在新账号创建时初始化，之后由管理员调整。
+func (s *Store) UpsertOIDCUser(ident OIDCIdentity) (*User, error) {
+	ident.Issuer = strings.TrimSpace(ident.Issuer)
+	ident.Subject = strings.TrimSpace(ident.Subject)
+	if ident.Subject == "" {
+		return nil, errors.New("OIDC subject is required")
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	row := tx.QueryRow(`SELECT id, username, display_name, is_admin,
+    oidc_issuer, oidc_subject, email, avatar_url, created_at
+FROM users WHERE oidc_issuer = ? AND oidc_subject = ?`, ident.Issuer, ident.Subject)
+	u, err := scanUser(row)
+	switch {
+	case err == nil:
+		display := u.DisplayName
+		if display == "" {
+			display = firstNonEmpty(ident.DisplayName, ident.PreferredUsername, ident.Email)
+		}
+		email := u.Email
+		if ident.Email != "" {
+			email = ident.Email
+		}
+		avatar := u.AvatarURL
+		if ident.AvatarURL != "" {
+			avatar = ident.AvatarURL
+		}
+		if _, err := tx.Exec(`UPDATE users SET display_name = ?, email = ?, avatar_url = ?, is_admin = ?
+WHERE id = ?`, display, email, avatar, boolInt(ident.Admin), u.ID); err != nil {
+			return nil, err
+		}
+		u.DisplayName = display
+		u.Email = email
+		u.AvatarURL = avatar
+		u.IsAdmin = ident.Admin
+		if err := loadUserLibraries(tx, u); err != nil {
+			return nil, err
+		}
+		// 默认书库对所有登录用户开放，避免新用户看到空书架。
+		if !u.IsAdmin {
+			defaultID, err := defaultLibraryID(tx)
+			if err != nil {
+				return nil, err
+			}
+			if defaultID != "" && !containsString(u.Libraries, defaultID) {
+				u.Libraries = append(u.Libraries, defaultID)
+				if err := replaceUserLibraries(tx, u.ID, u.Libraries); err != nil {
+					return nil, err
+				}
+			}
+		}
+	case errors.Is(err, sql.ErrNoRows):
+		username, err := uniqueUsername(tx, oidcUsernameBase(ident))
+		if err != nil {
+			return nil, err
+		}
+		display := firstNonEmpty(ident.DisplayName, ident.PreferredUsername, ident.Email, username)
+		u = &User{
+			ID:          randID(),
+			Username:    username,
+			DisplayName: display,
+			IsAdmin:     ident.Admin,
+			OIDCIssuer:  ident.Issuer,
+			OIDCSubject: ident.Subject,
+			Email:       ident.Email,
+			AvatarURL:   ident.AvatarURL,
+			CreatedAt:   time.Now(),
+		}
+		if ident.Admin {
+			u.Libraries, err = allLibraryIDs(tx)
+			if err != nil {
+				return nil, err
+			}
+		} else if defaultID, err := defaultLibraryID(tx); err != nil {
+			return nil, err
+		} else if defaultID != "" {
+			u.Libraries = []string{defaultID}
+		}
+		if _, err := tx.Exec(`INSERT INTO users
+(id, username, display_name, is_admin, oidc_issuer, oidc_subject, email, avatar_url, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			u.ID, u.Username, u.DisplayName, boolInt(u.IsAdmin), u.OIDCIssuer, u.OIDCSubject,
+			u.Email, u.AvatarURL, toMS(u.CreatedAt)); err != nil {
+			if isUniqueErr(err) {
+				return nil, ErrConflict
+			}
+			return nil, err
+		}
+		if err := replaceUserLibraries(tx, u.ID, u.Libraries); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// defaultLibraryID returns the library named "Default Library"; it also accepts
+// the legacy Chinese name so databases created before the rename keep working.
+func defaultLibraryID(tx *sql.Tx) (string, error) {
+	var id string
+	err := tx.QueryRow(`SELECT id FROM libraries WHERE name IN ('默认书库', 'Default Library')
+ORDER BY created_at, rowid LIMIT 1`).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return id, err
+}
+
+func containsString(list []string, value string) bool {
+	for _, item := range list {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
+func allLibraryIDs(tx *sql.Tx) ([]string, error) {
+	rows, err := tx.Query(`SELECT id FROM libraries ORDER BY created_at, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]string, 0, 4)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+func oidcUsernameBase(ident OIDCIdentity) string {
+	candidates := []string{ident.PreferredUsername, ident.Email, ident.DisplayName}
+	for _, raw := range candidates {
+		if at := strings.IndexByte(raw, '@'); at > 0 {
+			raw = raw[:at]
+		}
+		if name := sanitizeUsername(raw); len([]rune(name)) >= 2 {
+			return name
+		}
+	}
+	sub := sanitizeUsername(ident.Subject)
+	if len([]rune(sub)) > 8 {
+		sub = string([]rune(sub)[:8])
+	}
+	if sub == "" {
+		sub = "reader"
+	}
+	return "user-" + sub
+}
+
+func sanitizeUsername(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(raw) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '_', r == '-', r >= 0x4e00 && r <= 0x9fa5:
+			b.WriteRune(r)
+		case r == '.', r == ' ', r == '@':
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_")
+	if runes := []rune(out); len(runes) > 24 {
+		out = string(runes[:24])
+	}
+	return out
+}
+
+func uniqueUsername(tx *sql.Tx, base string) (string, error) {
+	if base == "" {
+		base = "user"
+	}
+	for i := 0; i < 1000; i++ {
+		candidate := base
+		if i > 0 {
+			suffix := "-" + strconv.Itoa(i+1)
+			candidate = truncateRunes(base, 24-len([]rune(suffix))) + suffix
+		}
+		var n int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM users WHERE username = ? COLLATE NOCASE`, candidate).Scan(&n); err != nil {
+			return "", err
+		}
+		if n == 0 {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("cannot generate a unique username")
+}
+
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n])
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
 // UpdateUser 在事务内修改用户，fn 返回错误时不落盘。
 func (s *Store) UpdateUser(id string, fn func(*User) error) error {
 	tx, err := s.db.Begin()
@@ -449,7 +698,7 @@ func (s *Store) UpdateUser(id string, fn func(*User) error) error {
 	}
 	defer tx.Rollback()
 
-	row := tx.QueryRow(`SELECT id, username, display_name, password_hash, is_admin, created_at
+	row := tx.QueryRow(`SELECT id, username, display_name, is_admin, oidc_issuer, oidc_subject, email, avatar_url, created_at
 FROM users WHERE id = ?`, id)
 	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -475,8 +724,10 @@ FROM users WHERE id = ?`, id)
 			return ErrLastAdmin
 		}
 	}
-	_, err = tx.Exec(`UPDATE users SET username = ?, display_name = ?, password_hash = ?, is_admin = ?
-WHERE id = ?`, u.Username, u.DisplayName, u.PasswordHash, boolInt(u.IsAdmin), u.ID)
+	_, err = tx.Exec(`UPDATE users SET username = ?, display_name = ?, is_admin = ?,
+    oidc_issuer = ?, oidc_subject = ?, email = ?, avatar_url = ?
+WHERE id = ?`, u.Username, u.DisplayName, boolInt(u.IsAdmin),
+		u.OIDCIssuer, u.OIDCSubject, u.Email, u.AvatarURL, u.ID)
 	if err != nil {
 		if isUniqueErr(err) {
 			return ErrConflict
@@ -568,13 +819,13 @@ func (s *Store) PutSession(key string, sess Session) error {
 		sess.LastSeen = sess.CreatedAt
 	}
 	if _, err := s.db.Exec(`INSERT INTO sessions
-(key, id, user_id, user_agent, ip, created_at, last_seen, expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+(key, id, user_id, user_agent, ip, id_token, created_at, last_seen, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(key) DO UPDATE SET id = excluded.id, user_id = excluded.user_id,
-    user_agent = excluded.user_agent, ip = excluded.ip,
+    user_agent = excluded.user_agent, ip = excluded.ip, id_token = excluded.id_token,
     created_at = excluded.created_at, last_seen = excluded.last_seen,
     expires_at = excluded.expires_at`,
-		key, sess.ID, sess.UserID, sess.UserAgent, sess.IP,
+		key, sess.ID, sess.UserID, sess.UserAgent, sess.IP, sess.IDToken,
 		toMS(sess.CreatedAt), toMS(sess.LastSeen), toMS(sess.ExpiresAt)); err != nil {
 		return err
 	}
@@ -586,9 +837,9 @@ ON CONFLICT(key) DO UPDATE SET id = excluded.id, user_id = excluded.user_id,
 func (s *Store) GetSession(key string) (Session, bool) {
 	var sess Session
 	var created, lastSeen, expires int64
-	err := s.db.QueryRow(`SELECT id, user_id, user_agent, ip, created_at, last_seen, expires_at
+	err := s.db.QueryRow(`SELECT id, user_id, user_agent, ip, id_token, created_at, last_seen, expires_at
 FROM sessions WHERE key = ? AND expires_at > ?`, key, nowMS()).
-		Scan(&sess.ID, &sess.UserID, &sess.UserAgent, &sess.IP, &created, &lastSeen, &expires)
+		Scan(&sess.ID, &sess.UserID, &sess.UserAgent, &sess.IP, &sess.IDToken, &created, &lastSeen, &expires)
 	if err != nil {
 		return Session{}, false
 	}

@@ -107,7 +107,7 @@ func renderChapter(bookID string, chapterIndex int, chapterHref string, raw []by
 	})
 
 	if strings.TrimSpace(title) == "" {
-		title = fmt.Sprintf("第 %d 节", chapterIndex+1)
+		title = fmt.Sprintf("Section %d", chapterIndex+1)
 	}
 	if lang == "" {
 		lang = "zh-CN"
@@ -284,7 +284,7 @@ func stripTags(s string) string {
 // renderTXTChapter 把 TXT 章节包装成与 EPUB 章节一致的阅读文档。
 func renderTXTChapter(title, body, lang string) string {
 	if strings.TrimSpace(title) == "" {
-		title = "正文"
+		title = "Body"
 	}
 	if lang == "" {
 		lang = "zh-CN"
@@ -317,7 +317,7 @@ p.txt-sep { text-align:center; text-indent:0; color:#a08c6a; letter-spacing:.5em
 func renderComicChapter(bookID string, index int, title string, spread bool) string {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		title = fmt.Sprintf("第 %d 页", index+1)
+		title = fmt.Sprintf("Page %d", index+1)
 	}
 	var sb strings.Builder
 	sb.WriteString("<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">")
@@ -345,7 +345,7 @@ user-select:none;-webkit-user-drag:none;}
 		sb.WriteString("/page/")
 		sb.WriteString(fmt.Sprintf("%d", p))
 		sb.WriteString("\" alt=\"")
-		sb.WriteString(html.EscapeString(fmt.Sprintf("第 %d 页", p+1)))
+		sb.WriteString(html.EscapeString(fmt.Sprintf("Page %d", p+1)))
 		sb.WriteString("\" draggable=\"false\"></div>")
 	}
 	sb.WriteString("</body></html>")

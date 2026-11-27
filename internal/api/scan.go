@@ -34,7 +34,7 @@ func (s *Server) EnsureDefaultLibrary() error {
 		return err
 	}
 	return s.store.AddLibrary(&store.Library{
-		Name: "默认书库",
+		Name: "Default Library",
 		Path: abs,
 		Type: "mixed",
 	})
@@ -91,13 +91,13 @@ func (c *scanCounts) fail(err error) {
 func (s *Server) runScan(libID string) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			slog.Error("书库扫描异常", "library", libID, "err", rec, "stack", string(debug.Stack()))
-			s.finishScan(libID, 0, 0, 0, 0, 1, fmt.Sprintf("扫描异常：%v", rec))
+			slog.Error("library scan error", "library", libID, "err", rec, "stack", string(debug.Stack()))
+			s.finishScan(libID, 0, 0, 0, 0, 1, fmt.Sprintf("scan error: %v", rec))
 		}
 	}()
 	lib, err := s.store.GetLibrary(libID)
 	if err != nil {
-		s.finishScan(libID, 0, 0, 0, 0, 1, "书库不存在")
+		s.finishScan(libID, 0, 0, 0, 0, 1, "library not found")
 		return
 	}
 	if lib.Kind == "webdav" {
@@ -113,7 +113,7 @@ func (s *Server) runScan(libID string) {
 	if resolved, err := filepath.EvalSymlinks(lib.Path); err == nil {
 		root = resolved
 	} else {
-		counts.fail(fmt.Errorf("书库路径不可访问：%w", err))
+		counts.fail(fmt.Errorf("library path is not accessible: %w", err))
 		clean = false
 	}
 	if clean {
@@ -161,7 +161,7 @@ func (s *Server) runScan(libID string) {
 		// 空目录/未挂载的挂载点会让扫描结果为空。此时保留原有记录，
 		// 避免网络存储短暂离线或被清空时连带删除所有用户的阅读数据。
 		if len(seen) == 0 && before > 0 {
-			counts.fail(fmt.Errorf("扫描结果为空，已保留原有 %d 条书籍记录，请检查书库挂载", before))
+			counts.fail(fmt.Errorf("scan returned no books; kept the existing %d records. Check that the library is mounted", before))
 		} else if removed, err := s.store.PruneBooks(lib.ID, seen); err != nil {
 			counts.fail(err)
 		} else {
@@ -169,7 +169,7 @@ func (s *Server) runScan(libID string) {
 		}
 	}
 	s.finishScan(libID, counts.added, counts.updated, counts.skipped, counts.removed, counts.failed, counts.firstErr)
-	slog.Info("书库扫描完成", "library", lib.Name, "kind", lib.Kind,
+	slog.Info("library scan completed", "library", lib.Name, "kind", lib.Kind,
 		"added", counts.added, "updated", counts.updated,
 		"skipped", counts.skipped, "removed", counts.removed, "failed", counts.failed)
 }
@@ -186,7 +186,7 @@ func (s *Server) runWebDAVScan(lib *store.Library) {
 	defer cancel()
 	files, err := client.List(ctx)
 	if err != nil {
-		s.finishScan(lib.ID, 0, 0, 0, 0, 1, "读取 WebDAV 目录失败："+err.Error())
+		s.finishScan(lib.ID, 0, 0, 0, 0, 1, "failed to read WebDAV directory: "+err.Error())
 		return
 	}
 
@@ -232,7 +232,7 @@ func (s *Server) runWebDAVScan(lib *store.Library) {
 	}
 
 	if len(seen) == 0 && before > 0 {
-		counts.fail(fmt.Errorf("WebDAV 扫描结果为空，已保留原有 %d 条书籍记录与缓存", before))
+		counts.fail(fmt.Errorf("WebDAV scan returned no books; kept the existing %d records and cache", before))
 	} else {
 		removed, err := s.store.PruneBooks(lib.ID, seen)
 		if err != nil {
@@ -243,7 +243,7 @@ func (s *Server) runWebDAVScan(lib *store.Library) {
 		s.pruneWebDAVCache(lib, seen)
 	}
 	s.finishScan(lib.ID, counts.added, counts.updated, counts.skipped, counts.removed, counts.failed, counts.firstErr)
-	slog.Info("WebDAV 书库扫描完成", "library", lib.Name,
+	slog.Info("WebDAV library scan completed", "library", lib.Name,
 		"added", counts.added, "updated", counts.updated,
 		"skipped", counts.skipped, "removed", counts.removed, "failed", counts.failed)
 }
@@ -280,7 +280,7 @@ func webdavBookStub(lib *store.Library, rel string, rf webdav.File, existing *st
 		Language:    "zh-CN",
 		Size:        rf.Size,
 		ModTime:     rf.ModTime.UnixNano(),
-		Description: "WebDAV · 打开时下载",
+		Description: "WebDAV · downloaded on demand",
 		AddedAt:     time.Now(),
 	}
 	if existing != nil {
@@ -311,8 +311,8 @@ func bookType(rel string) string {
 func (s *Server) processScannedFile(lib *store.Library, rel, full string, info os.FileInfo, counts *scanCounts) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			counts.fail(fmt.Errorf("%s: 解析异常: %v", rel, rec))
-			slog.Error("解析书籍异常", "file", full, "err", rec, "stack", string(debug.Stack()))
+			counts.fail(fmt.Errorf("%s: parse error: %v", rel, rec))
+			slog.Error("book parse error", "file", full, "err", rec, "stack", string(debug.Stack()))
 		}
 	}()
 	id := store.BookID(lib.ID, rel)
@@ -326,7 +326,7 @@ func (s *Server) processScannedFile(lib *store.Library, rel, full string, info o
 	book, err := s.buildBook(lib, rel, full, info)
 	if err != nil {
 		counts.fail(fmt.Errorf("%s: %w", rel, err))
-		slog.Warn("解析书籍失败", "file", full, "err", err)
+		slog.Warn("failed to parse book", "file", full, "err", err)
 		s.updateScanProgress(lib.ID, counts.added, counts.updated, counts.skipped, counts.failed)
 		return
 	}
@@ -457,12 +457,12 @@ func (s *Server) buildBook(lib *store.Library, rel, full string, info os.FileInf
 		b.Type = "pdf"
 		b.Title, b.Creator = mediaName(rel)
 		b.ChapterCount = pages
-		b.Description = "PDF 文档 · " + strconv.Itoa(pages) + " 页"
+		b.Description = "PDF · " + strconv.Itoa(pages) + " pages"
 	case ".mp3", ".m4a", ".m4b", ".flac", ".ogg", ".opus", ".wav":
 		b.Type = "audio"
 		b.Title, b.Creator = mediaName(rel)
 		b.ChapterCount = 1
-		b.Description = "有声书"
+		b.Description = "Audiobook"
 	case ".cbz", ".cbr":
 		pages, err := comic.List(full)
 		if err != nil {
@@ -472,7 +472,7 @@ func (s *Server) buildBook(lib *store.Library, rel, full string, info os.FileInf
 		b.Title, b.Creator = mediaName(rel)
 		b.ChapterCount = len(pages)
 		b.HasCover = true
-		b.Description = "漫画 · " + strconv.Itoa(len(pages)) + " 页"
+		b.Description = "Comic · " + strconv.Itoa(len(pages)) + " pages"
 	case ".fb2":
 		fb, err := fb2.Open(full, b.ID)
 		if err != nil {
@@ -489,7 +489,7 @@ func (s *Server) buildBook(lib *store.Library, rel, full string, info os.FileInf
 		b.ChapterCount = len(fb.Chapters)
 	case ".mobi", ".azw", ".azw3", ".prc":
 		if info.Size() > maxKindleBookBytes {
-			return nil, fmt.Errorf("Kindle 文件超过 %d MB 上限", maxKindleBookBytes>>20)
+			return nil, fmt.Errorf("Kindle file exceeds the %d MB limit", maxKindleBookBytes>>20)
 		}
 		kb, err := kindle.Open(full)
 		if err != nil {
@@ -497,7 +497,7 @@ func (s *Server) buildBook(lib *store.Library, rel, full string, info os.FileInf
 		}
 		chapters := kb.SplitChapters(b.ID)
 		if len(chapters) == 0 {
-			return nil, &badRequest{"书中没有可阅读的正文"}
+			return nil, &badRequest{"this book has no readable body text"}
 		}
 		b.Type = strings.TrimPrefix(strings.ToLower(filepath.Ext(rel)), ".")
 		b.Title = kb.Title
@@ -532,13 +532,13 @@ func (s *Server) buildBook(lib *store.Library, rel, full string, info os.FileInf
 		b.ChapterCount = len(tb.Chapters)
 		b.Description = excerpt(tb.Text, 120)
 	default:
-		return nil, &badRequest{"不支持的文件类型"}
+		return nil, &badRequest{"unsupported file type"}
 	}
 	if b.Title == "" {
 		b.Title = strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel))
 	}
 	if b.Creator == "" {
-		b.Creator = "佚名"
+		b.Creator = "Unknown"
 	}
 	// 内容摘要用于上传去重（超大文件跳过）
 	if info.Size() <= 64<<20 {

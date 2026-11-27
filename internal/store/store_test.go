@@ -20,8 +20,8 @@ func newTestStore(t *testing.T) *Store {
 func TestPerUserProgressIsolation(t *testing.T) {
 	s := newTestStore(t)
 
-	alice := &User{Username: "alice", DisplayName: "Alice", PasswordHash: "x"}
-	bob := &User{Username: "bob", DisplayName: "Bob", PasswordHash: "x"}
+	alice := &User{Username: "alice", DisplayName: "Alice"}
+	bob := &User{Username: "bob", DisplayName: "Bob"}
 	if err := s.CreateUser(alice); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestPerUserProgressIsolation(t *testing.T) {
 
 func TestLibraryAccessAndDeletion(t *testing.T) {
 	s := newTestStore(t)
-	u := &User{Username: "reader", PasswordHash: "x"}
+	u := &User{Username: "reader"}
 	if err := s.CreateUser(u); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestLibraryAccessAndDeletion(t *testing.T) {
 
 func TestSessionLifecycle(t *testing.T) {
 	s := newTestStore(t)
-	u := &User{Username: "u", PasswordHash: "x"}
+	u := &User{Username: "u"}
 	_ = s.CreateUser(u)
 
 	now := time.Now()
@@ -170,7 +170,7 @@ func TestSQLitePersistenceAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u := &User{Username: "reader", DisplayName: "读者", PasswordHash: "x"}
+	u := &User{Username: "reader", DisplayName: "读者"}
 	if err := s.CreateUser(u); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestSQLitePersistenceAcrossReopen(t *testing.T) {
 
 func TestDeleteUserCascadesReadingData(t *testing.T) {
 	s := newTestStore(t)
-	u := &User{Username: "gone", PasswordHash: "x"}
+	u := &User{Username: "gone"}
 	if err := s.CreateUser(u); err != nil {
 		t.Fatal(err)
 	}
@@ -263,8 +263,8 @@ func TestDeleteUserCascadesReadingData(t *testing.T) {
 
 func TestAnnotationCRUDAndIsolation(t *testing.T) {
 	s := newTestStore(t)
-	alice := &User{Username: "alice", PasswordHash: "x"}
-	bob := &User{Username: "bob", PasswordHash: "x"}
+	alice := &User{Username: "alice"}
+	bob := &User{Username: "bob"}
 	_ = s.CreateUser(alice)
 	_ = s.CreateUser(bob)
 	lib := &Library{Name: "批注库", Path: t.TempDir(), Type: "mixed"}
@@ -305,7 +305,7 @@ func TestAnnotationCRUDAndIsolation(t *testing.T) {
 
 func TestSessionDevices(t *testing.T) {
 	s := newTestStore(t)
-	u := &User{Username: "dev", PasswordHash: "x"}
+	u := &User{Username: "dev"}
 	_ = s.CreateUser(u)
 	now := time.Now()
 	if err := s.PutSession("k1", Session{
@@ -340,7 +340,7 @@ func TestSessionDevices(t *testing.T) {
 	}
 }
 
-func TestMigrateV1SessionIDs(t *testing.T) {
+func TestMigrateV1ToCurrent(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "moyue.db")
 	db, err := sql.Open("sqlite", "file:"+dbPath)
@@ -378,15 +378,19 @@ func TestMigrateV1SessionIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	list := s.ListSessions("u1")
-	if len(list) != 1 {
-		t.Fatalf("sessions = %d", len(list))
+	// v2 会补齐会话 id / last_seen；随后 v5 因移除本地登录而清空旧会话。
+	if list := s.ListSessions("u1"); len(list) != 0 {
+		t.Fatalf("legacy sessions should be cleared, got %d", len(list))
 	}
-	if list[0].ID == "" {
-		t.Error("migrated session has no id")
+	if _, err := s.db.Exec(`SELECT id_token FROM sessions LIMIT 1`); err != nil {
+		t.Fatalf("sessions 缺少 id_token 字段: %v", err)
 	}
-	if list[0].LastSeen.IsZero() {
-		t.Error("migrated session has no last_seen")
+	if u, err := s.GetUser("u1"); err != nil || u.IsAdmin {
+		t.Fatalf("legacy user = %+v, err = %v", u, err)
+	}
+	// v7 会删除本地登录遗留的密码字段。
+	if _, err := s.db.Exec(`SELECT password_hash FROM users LIMIT 1`); err == nil {
+		t.Fatal("password_hash 字段应在迁移后删除")
 	}
 	var version int
 	_ = s.db.QueryRow(`PRAGMA user_version`).Scan(&version)
@@ -406,8 +410,8 @@ func TestMigrateV1SessionIDs(t *testing.T) {
 
 func TestLastAdminCannotBeDemoted(t *testing.T) {
 	s := newTestStore(t)
-	a := &User{Username: "admin-a", PasswordHash: "x", IsAdmin: true}
-	b := &User{Username: "admin-b", PasswordHash: "x", IsAdmin: true}
+	a := &User{Username: "admin-a", IsAdmin: true}
+	b := &User{Username: "admin-b", IsAdmin: true}
 	if err := s.CreateUser(a); err != nil {
 		t.Fatal(err)
 	}
@@ -425,5 +429,143 @@ func TestLastAdminCannotBeDemoted(t *testing.T) {
 	}
 	if err := demote(b.ID); !errors.Is(err, ErrLastAdmin) {
 		t.Fatalf("demote last admin = %v, want ErrLastAdmin", err)
+	}
+}
+
+func TestUpsertOIDCUser(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	lib := &Library{Name: "OIDC 书库", Path: t.TempDir(), Type: "mixed"}
+	if err := s.AddLibrary(lib); err != nil {
+		t.Fatal(err)
+	}
+	defaultLib := &Library{Name: "默认书库", Path: t.TempDir(), Type: "mixed"}
+	if err := s.AddLibrary(defaultLib); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := s.UpsertOIDCUser(OIDCIdentity{
+		Issuer:            "https://id.example.com",
+		Subject:           "sub-admin",
+		Email:             "admin@example.com",
+		DisplayName:       "Alice",
+		PreferredUsername: "alice",
+		Admin:             true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.IsAdmin || len(first.Libraries) != 2 {
+		t.Fatalf("new admin = %+v", first)
+	}
+
+	// 再次登录：同一个人不重复建号，白名单移除后应降级，但书库权限保留。
+	second, err := s.UpsertOIDCUser(OIDCIdentity{
+		Issuer:            "https://id.example.com",
+		Subject:           "sub-admin",
+		Email:             "admin@example.com",
+		PreferredUsername: "alice",
+		Admin:             false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != first.ID || second.IsAdmin {
+		t.Fatalf("relogin = %+v, want same id and non-admin", second)
+	}
+	if len(second.Libraries) != 2 {
+		t.Fatalf("libraries after demote = %v", second.Libraries)
+	}
+
+	// 同名 preferred_username 的另一个 subject 应得到唯一用户名。
+	third, err := s.UpsertOIDCUser(OIDCIdentity{
+		Issuer:            "https://id.example.com",
+		Subject:           "sub-reader",
+		Email:             "reader@example.com",
+		PreferredUsername: "alice",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Username == first.Username {
+		t.Fatalf("duplicate username %q", third.Username)
+	}
+	// 普通用户登录即拥有默认书库，其它书库仍需管理员授权。
+	if third.IsAdmin || len(third.Libraries) != 1 || third.Libraries[0] != defaultLib.ID {
+		t.Fatalf("new non-admin = %+v", third)
+	}
+	if users := s.ListUsers(); len(users) != 2 {
+		t.Fatalf("users = %d, want 2", len(users))
+	}
+}
+
+func TestDefaultLibraryOpenToAllUsers(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	u := &User{Username: "reader"}
+	if err := s.CreateUser(u); err != nil {
+		t.Fatal(err)
+	}
+	def := &Library{Name: "默认书库", Path: t.TempDir(), Type: "mixed"}
+	other := &Library{Name: "其它书库", Path: t.TempDir(), Type: "mixed"}
+	if err := s.AddLibrary(def); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddLibrary(other); err != nil {
+		t.Fatal(err)
+	}
+
+	// 未显式授权也能访问默认书库，其它书库仍需授权。
+	got, err := s.GetUser(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.CanAccess(got, def.ID) || s.CanAccess(got, other.ID) {
+		t.Fatalf("default access = %v, libraries = %v", s.CanAccess(got, def.ID), got.Libraries)
+	}
+	list := s.ListUsers()
+	if len(list) != 1 || !s.CanAccess(list[0], def.ID) {
+		t.Fatalf("list users default access = %+v", list)
+	}
+
+	// 管理员清空授权后，默认书库仍对用户开放。
+	if err := s.UpdateUser(u.ID, func(user *User) error {
+		user.Libraries = nil
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = s.GetUser(u.ID)
+	if !s.CanAccess(got, def.ID) {
+		t.Fatalf("default lost after clearing grants: %v", got.Libraries)
+	}
+}
+
+// 新建库使用英文名 Default Library，同样对所有登录用户开放。
+func TestDefaultLibraryEnglishName(t *testing.T) {
+	s := newTestStore(t)
+	defer s.Close()
+
+	u := &User{Username: "reader"}
+	if err := s.CreateUser(u); err != nil {
+		t.Fatal(err)
+	}
+	def := &Library{Name: "Default Library", Path: t.TempDir(), Type: "mixed"}
+	other := &Library{Name: "Other", Path: t.TempDir(), Type: "mixed"}
+	if err := s.AddLibrary(def); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddLibrary(other); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.GetUser(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.CanAccess(got, def.ID) || s.CanAccess(got, other.ID) {
+		t.Fatalf("default access = %v, libraries = %v", s.CanAccess(got, def.ID), got.Libraries)
 	}
 }

@@ -54,22 +54,22 @@ func (s *Server) comicPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if b.Type != "cbz" && b.Type != "cbr" {
-		writeError(w, http.StatusBadRequest, "这本书不是漫画包")
+		writeError(w, http.StatusBadRequest, "this book is not a comic archive")
 		return
 	}
 	idx, err := strconv.Atoi(r.PathValue("index"))
 	if err != nil || idx < 0 {
-		writeError(w, http.StatusBadRequest, "页码无效")
+		writeError(w, http.StatusBadRequest, "invalid page number")
 		return
 	}
 	pages, err := s.comicPages(b)
 	if err != nil || idx >= len(pages) {
-		writeError(w, http.StatusNotFound, "页面不存在")
+		writeError(w, http.StatusNotFound, "page not found")
 		return
 	}
 	data, err := comic.Read(s.bookPath(b), pages[idx].Name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取页面失败")
+		writeError(w, http.StatusInternalServerError, "failed to read page")
 		return
 	}
 	w.Header().Set("Content-Type", contentType(pages[idx].Name))
@@ -159,7 +159,7 @@ func pdfPageCount(path string) (int, error) {
 		return 0, err
 	}
 	if n <= 0 {
-		return 0, errors.New("PDF 页数为 0")
+		return 0, errors.New("PDF has zero pages")
 	}
 	return n, nil
 }

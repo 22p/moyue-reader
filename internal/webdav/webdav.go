@@ -74,13 +74,13 @@ func New(rawURL, user, pass string) (*Client, error) {
 	rawURL = strings.TrimSpace(rawURL)
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("WebDAV 地址无效：%w", err)
+		return nil, fmt.Errorf("invalid WebDAV URL: %w", err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("WebDAV 地址必须以 http:// 或 https:// 开头")
+		return nil, fmt.Errorf("WebDAV URL must start with http:// or https://")
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("WebDAV 地址缺少主机名")
+		return nil, fmt.Errorf("WebDAV URL is missing a host")
 	}
 	if !strings.HasSuffix(u.Path, "/") {
 		u.Path += "/"
@@ -140,7 +140,7 @@ func (c *Client) listDir(ctx context.Context, dir string) ([]davEntry, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("连接 WebDAV 失败：%w", err)
+		return nil, fmt.Errorf("failed to connect to WebDAV: %w", err)
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
@@ -148,12 +148,12 @@ func (c *Client) listDir(ctx context.Context, dir string) ([]davEntry, error) {
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusMultiStatus && resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("WebDAV 返回 %s", resp.Status)
+		return nil, fmt.Errorf("WebDAV returned %s", resp.Status)
 	}
 
 	var ms davMultiStatus
 	if err := xml.Unmarshal(body, &ms); err != nil {
-		return nil, fmt.Errorf("解析 WebDAV 目录失败：%w", err)
+		return nil, fmt.Errorf("failed to parse WebDAV directory: %w", err)
 	}
 
 	out := make([]davEntry, 0, len(ms.Responses))
@@ -256,14 +256,14 @@ func (c *Client) Download(ctx context.Context, rel, dst string, maxBytes int64) 
 	c.auth(req)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("下载失败：%w", err)
+		return fmt.Errorf("download failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("下载 %s 返回 %s", rel, resp.Status)
+		return fmt.Errorf("download %s returned %s", rel, resp.Status)
 	}
 	if resp.ContentLength > maxBytes {
-		return fmt.Errorf("远程文件超过 %d MB 上限", maxBytes>>20)
+		return fmt.Errorf("remote file exceeds the %d MB limit", maxBytes>>20)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
@@ -286,7 +286,7 @@ func (c *Client) Download(ctx context.Context, rel, dst string, maxBytes int64) 
 	}
 	if n > maxBytes {
 		tmp.Close()
-		return fmt.Errorf("远程文件超过 %d MB 上限", maxBytes>>20)
+		return fmt.Errorf("remote file exceeds the %d MB limit", maxBytes>>20)
 	}
 	if err := tmp.Close(); err != nil {
 		return err

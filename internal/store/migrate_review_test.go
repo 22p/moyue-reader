@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // 本文件覆盖数据层的三项正确性：迁移链幂等（含 user_version 回退再升级）、
@@ -77,7 +78,7 @@ func TestMigrationIdempotent(t *testing.T) {
 func TestMigrationReplayAfterVersionRollback(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "data")
 
-	// 先在 v4 上写入真实数据，回退版本后这些数据必须还在
+	// 先在最新版本上写入真实数据，回退版本后这些数据必须还在
 	st := openStore(t, dir)
 	lib := &Library{Name: "迁移库", Path: dir, Type: "mixed", Kind: "local"}
 	if err := st.AddLibrary(lib); err != nil {
@@ -85,7 +86,7 @@ func TestMigrationReplayAfterVersionRollback(t *testing.T) {
 	}
 	st.Close()
 
-	// 逐级回退再升级：4 -> 1 -> 4，检查 migrateV2/V3/V4 重放是否幂等
+	// 逐级回退再升级：7 -> 1 -> 7，检查各版本迁移重放是否幂等
 	for _, target := range []int{3, 2, 1} {
 		st = openStore(t, dir)
 		setUserVersion(t, st, target)
@@ -104,6 +105,12 @@ func TestMigrationReplayAfterVersionRollback(t *testing.T) {
 		}
 		if _, err := st.db.Exec(`SELECT COUNT(*) FROM annotations`); err != nil {
 			t.Fatalf("annotations 表不可用: %v", err)
+		}
+		if _, err := st.db.Exec(`SELECT id_token FROM sessions LIMIT 1`); err != nil {
+			t.Fatalf("sessions 缺少 id_token 字段: %v", err)
+		}
+		if _, err := st.db.Exec(`SELECT oidc_issuer, oidc_subject, email, avatar_url FROM users LIMIT 1`); err != nil {
+			t.Fatalf("users 缺少 OIDC 字段: %v", err)
 		}
 		st.Close()
 	}
@@ -138,8 +145,8 @@ func TestAccountIsolationAcrossUsers(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "data"))
 	defer st.Close()
 
-	alice := &User{Username: "alice", PasswordHash: "x", IsAdmin: true}
-	bob := &User{Username: "bob", PasswordHash: "x"}
+	alice := &User{Username: "alice", IsAdmin: true}
+	bob := &User{Username: "bob"}
 	if err := st.CreateUser(alice); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +200,7 @@ func TestLibraryAccessGrant(t *testing.T) {
 	if err := st.AddLibrary(lib); err != nil {
 		t.Fatal(err)
 	}
-	u := &User{Username: "reader", PasswordHash: "x", Libraries: []string{}}
+	u := &User{Username: "reader", Libraries: []string{}}
 	if err := st.CreateUser(u); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +208,7 @@ func TestLibraryAccessGrant(t *testing.T) {
 		t.Error("未授权用户竟然可以访问书库")
 	}
 	// 管理员不受书库授权限制
-	admin := &User{Username: "root", PasswordHash: "x", IsAdmin: true, Libraries: []string{}}
+	admin := &User{Username: "root", IsAdmin: true, Libraries: []string{}}
 	if err := st.CreateUser(admin); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +223,7 @@ func TestCascadeDelete(t *testing.T) {
 	st := openStore(t, filepath.Join(t.TempDir(), "data"))
 	defer st.Close()
 
-	alice := &User{Username: "alice", PasswordHash: "x", IsAdmin: true}
+	alice := &User{Username: "alice", IsAdmin: true}
 	if err := st.CreateUser(alice); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +273,7 @@ func TestCascadeDelete(t *testing.T) {
 	if err := st.DeleteLibrary(lib.ID); err == nil {
 		t.Error("删除不存在的书库应当返回 ErrNotFound")
 	}
-	admin2 := &User{Username: "root2", PasswordHash: "x", IsAdmin: true}
+	admin2 := &User{Username: "root2", IsAdmin: true}
 	if err := st.CreateUser(admin2); err != nil {
 		t.Fatal(err)
 	}
@@ -291,3 +298,33 @@ func TestCascadeDelete(t *testing.T) {
 
 // 确保 sql 包被使用（ErrNoRows 断言用得到）
 var _ = sql.ErrNoRows
+
+func TestMigrateV5InvalidatesLocalLogins(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	st := openStore(t, dir)
+	u := &User{Username: "legacy", IsAdmin: true}
+	if err := st.CreateUser(u); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := st.PutSession("legacy-session", Session{
+		UserID: u.ID, CreatedAt: now, LastSeen: now, ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setUserVersion(t, st, 4)
+	st.Close()
+
+	st = openStore(t, dir)
+	defer st.Close()
+	got, err := st.GetUser(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IsAdmin {
+		t.Error("旧本地账号升级后不应保留管理员权限")
+	}
+	if _, ok := st.GetSession("legacy-session"); ok {
+		t.Error("升级后旧会话应全部失效")
+	}
+}

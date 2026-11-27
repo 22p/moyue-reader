@@ -43,7 +43,7 @@ func Open(path, bookID string) (*Book, error) {
 		return nil, err
 	}
 	if info.Size() > 64<<20 {
-		return nil, errors.New("FB2 文件超过 64MB")
+		return nil, errors.New("FB2 file exceeds the 64 MB limit")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -65,7 +65,7 @@ func Parse(data []byte, bookID string) (*Book, error) {
 		return nil, err
 	}
 	if root == nil || root.Name != "FictionBook" {
-		return nil, errors.New("不是有效的 FB2 文件")
+		return nil, errors.New("not a valid FB2 file")
 	}
 
 	book := &Book{
@@ -114,7 +114,7 @@ func Parse(data []byte, bookID string) (*Book, error) {
 		for _, sec := range sections {
 			title := sectionTitle(sec)
 			if title == "" {
-				title = fmt.Sprintf("第 %d 节", len(book.Chapters)+1)
+				title = fmt.Sprintf("Section %d", len(book.Chapters)+1)
 			}
 			book.Chapters = append(book.Chapters, Chapter{
 				Title: title,
@@ -123,7 +123,7 @@ func Parse(data []byte, bookID string) (*Book, error) {
 		}
 	}
 	if len(book.Chapters) == 0 {
-		return nil, errors.New("FB2 中没有正文")
+		return nil, errors.New("FB2 has no body text")
 	}
 	return book, nil
 }
@@ -198,7 +198,7 @@ func firstText(b *Book, body *xmlNode) string {
 	if t := sectionTitle(body); t != "" {
 		return t
 	}
-	return "正文"
+	return "Body"
 }
 
 /* ------------------------------ XML 树 ------------------------------ */

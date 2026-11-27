@@ -90,7 +90,7 @@ func TestSplitFallbackChunk(t *testing.T) {
 	if len(chapters) < 2 {
 		t.Fatalf("expected chunked chapters, got %d", len(chapters))
 	}
-	if chapters[0].Title != "正文" {
+	if chapters[0].Title != "Body" {
 		t.Errorf("first title = %q", chapters[0].Title)
 	}
 }

@@ -7,7 +7,7 @@ import (
 
 // schemaVersion 是当前数据库结构版本。修改表结构时递增，并在 migrate 中
 // 添加对应的升级步骤，避免升级后旧库缺少字段。
-const schemaVersion = 4
+const schemaVersion = 7
 
 func (s *Store) migrate() error {
 	var version int
@@ -15,7 +15,7 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if version > schemaVersion {
-		return fmt.Errorf("数据库版本 %d 高于程序支持的 %d", version, schemaVersion)
+		return fmt.Errorf("database version %d is newer than the supported %d", version, schemaVersion)
 	}
 	if version == 0 {
 		version = 1
@@ -47,6 +47,24 @@ func (s *Store) migrate() error {
 			return err
 		}
 		version = 4
+	}
+	if version < 5 {
+		if err := migrateV5(tx); err != nil {
+			return err
+		}
+		version = 5
+	}
+	if version < 6 {
+		if err := migrateV6(tx); err != nil {
+			return err
+		}
+		version = 6
+	}
+	if version < 7 {
+		if err := migrateV7(tx); err != nil {
+			return err
+		}
+		version = 7
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, version)); err != nil {
 		return err
@@ -158,6 +176,69 @@ func migrateV4(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// migrateV5 增加 OIDC 身份字段，登录账号改由外部身份提供商维护。
+func migrateV5(tx *sql.Tx) error {
+	columns := []struct {
+		name string
+		sql  string
+	}{
+		{"oidc_issuer", `ALTER TABLE users ADD COLUMN oidc_issuer TEXT NOT NULL DEFAULT ''`},
+		{"oidc_subject", `ALTER TABLE users ADD COLUMN oidc_subject TEXT NOT NULL DEFAULT ''`},
+		{"email", `ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''`},
+		{"avatar_url", `ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, c := range columns {
+		ok, err := hasColumn(tx, "users", c.name)
+		if err != nil {
+			return err
+		}
+		if ok {
+			continue
+		}
+		if _, err := tx.Exec(c.sql); err != nil {
+			return err
+		}
+	}
+	_, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc
+    ON users(oidc_issuer, oidc_subject) WHERE oidc_subject <> ''`)
+	if err != nil {
+		return err
+	}
+	// 本地密码登录已移除：旧账号不能再作为管理员使用，旧会话也必须失效，
+	// 强制所有用户重新走 OIDC 登录。
+	if _, err := tx.Exec(`UPDATE users SET is_admin = 0 WHERE oidc_subject = ''`); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`DELETE FROM sessions`)
+	return err
+}
+
+// migrateV6 在会话中保存 ID Token，用于 RP 主动注销的 id_token_hint。
+func migrateV6(tx *sql.Tx) error {
+	ok, err := hasColumn(tx, "sessions", "id_token")
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	_, err = tx.Exec(`ALTER TABLE sessions ADD COLUMN id_token TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+// migrateV7 删除本地密码登录遗留的 password_hash 字段。
+func migrateV7(tx *sql.Tx) error {
+	ok, err := hasColumn(tx, "users", "password_hash")
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	_, err = tx.Exec(`ALTER TABLE users DROP COLUMN password_hash`)
+	return err
 }
 
 func hasColumn(tx *sql.Tx, table, column string) (bool, error) {

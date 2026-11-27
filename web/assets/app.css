@@ -246,9 +246,11 @@ input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   letter-spacing: .02em;
   cursor: pointer;
   white-space: nowrap;
+  text-decoration: none;
   transition: transform .15s, background .2s, box-shadow .2s, border-color .2s;
 }
 .btn:active { transform: scale(.97); }
+.btn[aria-disabled="true"] { pointer-events: none; opacity: .55; }
 .btn .icon { width: 16px; height: 16px; }
 .btn-primary {
   background: var(--accent);

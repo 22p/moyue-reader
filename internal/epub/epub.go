@@ -19,7 +19,7 @@ import (
 )
 
 // ErrInvalid 表示文件不是可解析的 EPUB。
-var ErrInvalid = errors.New("不是有效的 EPUB 文件")
+var ErrInvalid = errors.New("not a valid EPUB file")
 
 // Chapter 是阅读顺序中的一个文档。
 type Chapter struct {
@@ -133,7 +133,7 @@ func (z *zipReader) lookup(name string) *zip.File {
 func (z *zipReader) read(name string) ([]byte, error) {
 	f := z.lookup(name)
 	if f == nil {
-		return nil, fmt.Errorf("epub: 找不到内部文件 %q", name)
+		return nil, fmt.Errorf("epub: internal file not found: %q", name)
 	}
 	rc, err := f.Open()
 	if err != nil {
@@ -176,7 +176,7 @@ func Open(file string) (*Book, error) {
 	}
 	var opf opfDoc
 	if err := xml.Unmarshal(raw, &opf); err != nil {
-		return nil, fmt.Errorf("%w: 无法解析 OPF: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: failed to parse OPF: %v", ErrInvalid, err)
 	}
 
 	opfDir := path.Dir(opfPath)
@@ -280,7 +280,7 @@ func Open(file string) (*Book, error) {
 	}
 	for i := range b.Chapters {
 		if b.Chapters[i].Title == "" {
-			b.Chapters[i].Title = fmt.Sprintf("第 %d 节", i+1)
+			b.Chapters[i].Title = fmt.Sprintf("Section %d", i+1)
 		}
 	}
 	if len(b.TOC) == 0 {

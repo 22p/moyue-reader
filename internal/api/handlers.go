@@ -56,11 +56,11 @@ func (s *Server) listBooks(w http.ResponseWriter, r *http.Request) {
 	filter := r.URL.Query().Get("library")
 	if filter != "" && filter != "all" {
 		if _, err := s.store.GetLibrary(filter); err != nil {
-			writeError(w, http.StatusNotFound, "书库不存在")
+			writeError(w, http.StatusNotFound, "library not found")
 			return
 		}
 		if !s.store.CanAccess(u, filter) {
-			writeError(w, http.StatusForbidden, "没有该书的访问权限")
+			writeError(w, http.StatusForbidden, "no access to this book")
 			return
 		}
 	}
@@ -105,13 +105,13 @@ func (s *Server) bookDetail(w http.ResponseWriter, r *http.Request) {
 	case "txt":
 		tb, err := s.parseTXT(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "TXT 解析失败："+err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to parse TXT: "+err.Error())
 			return
 		}
 		for i, ch := range tb.Chapters {
 			title := ch.Title
 			if title == "" {
-				title = "第 " + strconv.Itoa(i+1) + " 节"
+				title = "Section " + strconv.Itoa(i+1)
 			}
 			d.Chapters = append(d.Chapters, chapterInfo{Index: i, Title: title})
 			d.TOC = append(d.TOC, tocEntry{Title: title, Level: 0, Chapter: i})
@@ -119,21 +119,21 @@ func (s *Server) bookDetail(w http.ResponseWriter, r *http.Request) {
 	case "cbz", "cbr":
 		pages, err := s.comicPages(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "漫画包解析失败："+err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to parse comic archive: "+err.Error())
 			return
 		}
 		for i := range pages {
-			title := "第 " + strconv.Itoa(i+1) + " 页"
+			title := "Page " + strconv.Itoa(i+1)
 			d.Chapters = append(d.Chapters, chapterInfo{Index: i, Title: title})
 			d.TOC = append(d.TOC, tocEntry{Title: title, Level: 0, Chapter: i})
 		}
 	case "audio":
-		d.Chapters = append(d.Chapters, chapterInfo{Index: 0, Title: "音频"})
-		d.TOC = append(d.TOC, tocEntry{Title: "音频", Level: 0, Chapter: 0})
+		d.Chapters = append(d.Chapters, chapterInfo{Index: 0, Title: "Audio"})
+		d.TOC = append(d.TOC, tocEntry{Title: "Audio", Level: 0, Chapter: 0})
 	case "fb2":
 		fb, err := s.parseFB2(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "FB2 解析失败："+err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to parse FB2: "+err.Error())
 			return
 		}
 		for i, ch := range fb.Chapters {
@@ -143,7 +143,7 @@ func (s *Server) bookDetail(w http.ResponseWriter, r *http.Request) {
 	case "mobi", "azw", "azw3", "prc":
 		_, chapters, err := s.parseKindle(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "MOBI/AZW3 解析失败："+err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to parse MOBI/AZW3: "+err.Error())
 			return
 		}
 		for i, ch := range chapters {
@@ -158,14 +158,14 @@ func (s *Server) bookDetail(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for i := 0; i < b.ChapterCount; i++ {
-			title := "第 " + strconv.Itoa(i+1) + " 页"
+			title := "Page " + strconv.Itoa(i+1)
 			d.Chapters = append(d.Chapters, chapterInfo{Index: i, Title: title})
 			d.TOC = append(d.TOC, tocEntry{Title: title, Level: 0, Chapter: i})
 		}
 	default:
 		eb, err := s.parseEPUB(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "EPUB 解析失败："+err.Error())
+			writeError(w, http.StatusInternalServerError, "failed to parse EPUB: "+err.Error())
 			return
 		}
 		for i, ch := range eb.Chapters {
@@ -176,7 +176,7 @@ func (s *Server) bookDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(d.Chapters) == 0 {
-		writeError(w, http.StatusUnprocessableEntity, "这本书没有可阅读的内容")
+		writeError(w, http.StatusUnprocessableEntity, "this book has no readable content")
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
@@ -194,23 +194,23 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 	extendReadDeadline(w, 30*time.Minute)
 	r.Body = http.MaxBytesReader(w, r.Body, 256<<20)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "上传内容过大或格式不正确")
+		writeError(w, http.StatusBadRequest, "uploaded content is too large or malformed")
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "缺少 file 字段")
+		writeError(w, http.StatusBadRequest, "missing file field")
 		return
 	}
 	defer file.Close()
 
 	if header.Size > maxUploadBytes {
-		writeError(w, http.StatusRequestEntityTooLarge, "文件超过 200MB 上限")
+		writeError(w, http.StatusRequestEntityTooLarge, "file exceeds the 200 MB limit")
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if !uploadableExt(ext) {
-		writeError(w, http.StatusBadRequest, "支持 EPUB、TXT、PDF、CBZ、CBR、FB2、MOBI/AZW3 与音频文件")
+		writeError(w, http.StatusBadRequest, "supported formats: EPUB, TXT, PDF, CBZ, CBR, FB2, MOBI/AZW3 and audio")
 		return
 	}
 	lib, err := s.uploadTarget(r.FormValue("libraryId"))
@@ -219,13 +219,13 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.MkdirAll(lib.Path, 0o755); err != nil {
-		writeError(w, http.StatusInternalServerError, "书库目录不可写")
+		writeError(w, http.StatusInternalServerError, "library directory is not writable")
 		return
 	}
 
 	tmp, err := os.CreateTemp(lib.Path, ".upload-*")
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "无法写入书库目录")
+		writeError(w, http.StatusInternalServerError, "cannot write to library directory")
 		return
 	}
 	tmpName := tmp.Name()
@@ -234,13 +234,13 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		tmp.Close()
 		os.Remove(tmpName)
-		writeError(w, http.StatusBadRequest, "读取上传文件失败")
+		writeError(w, http.StatusBadRequest, "failed to read uploaded file")
 		return
 	}
 	if n > maxUploadBytes {
 		tmp.Close()
 		os.Remove(tmpName)
-		writeError(w, http.StatusRequestEntityTooLarge, "文件超过 200MB 上限")
+		writeError(w, http.StatusRequestEntityTooLarge, "file exceeds the 200 MB limit")
 		return
 	}
 	tmp.Close()
@@ -257,7 +257,7 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 
 	base := sanitizeFilename(strings.TrimSuffix(filepath.Base(header.Filename), filepath.Ext(header.Filename)))
 	if base == "" {
-		base = "未命名"
+		base = "Untitled"
 	}
 	name := base + ext
 	for i := 2; fileExists(filepath.Join(lib.Path, name)); i++ {
@@ -266,20 +266,20 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 	final := filepath.Join(lib.Path, name)
 	if err := os.Rename(tmpName, final); err != nil {
 		os.Remove(tmpName)
-		writeError(w, http.StatusInternalServerError, "保存文件失败")
+		writeError(w, http.StatusInternalServerError, "failed to save file")
 		return
 	}
 
 	info, err := os.Stat(final)
 	if err != nil {
 		os.Remove(final)
-		writeError(w, http.StatusInternalServerError, "读取文件失败")
+		writeError(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
 	rec, err := s.buildBook(lib, filepath.ToSlash(name), final, info)
 	if err != nil {
 		os.Remove(final)
-		writeError(w, http.StatusBadRequest, "无法解析该文件："+err.Error())
+		writeError(w, http.StatusBadRequest, "cannot parse file: "+err.Error())
 		return
 	}
 	rec.Checksum = checksum
@@ -288,7 +288,7 @@ func (s *Server) uploadBook(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.AddBook(rec); err != nil {
 		os.Remove(final)
-		writeError(w, http.StatusInternalServerError, "保存书籍信息失败")
+		writeError(w, http.StatusInternalServerError, "failed to save book metadata")
 		return
 	}
 	s.clearBookCache(rec.ID)
@@ -303,10 +303,10 @@ func (s *Server) uploadTarget(libID string) (*store.Library, error) {
 	if libID != "" {
 		lib, err := s.store.GetLibrary(libID)
 		if err != nil {
-			return nil, errors.New("目标书库不存在")
+			return nil, errors.New("target library not found")
 		}
 		if lib.Kind == "webdav" {
-			return nil, errors.New("WebDAV 书库请在远端添加文件后重新扫描")
+			return nil, errors.New("for WebDAV libraries, add files remotely and rescan")
 		}
 		return lib, nil
 	}
@@ -322,7 +322,7 @@ func (s *Server) uploadTarget(libID string) (*store.Library, error) {
 			return l, nil
 		}
 	}
-	return nil, errors.New("没有可上传的本地书库，请先在管理控制台创建本地目录")
+	return nil, errors.New("no local library available for upload; create a local directory in the admin console first")
 }
 
 func fileExists(p string) bool {
@@ -333,11 +333,11 @@ func fileExists(p string) bool {
 func (s *Server) deleteBook(w http.ResponseWriter, r *http.Request) {
 	b, err := s.store.GetBook(r.PathValue("id"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "书籍不存在")
+		writeError(w, http.StatusNotFound, "book not found")
 		return
 	}
 	if err := s.store.DeleteBook(b.ID); err != nil {
-		writeError(w, errStatus(err), "删除书籍失败")
+		writeError(w, errStatus(err), "failed to delete book")
 		return
 	}
 	if p := s.bookPath(b); p != "" {
@@ -478,18 +478,18 @@ func (s *Server) resource(w http.ResponseWriter, r *http.Request) {
 	}
 	name := cleanPath(r.URL.Query().Get("path"))
 	if name == "" || strings.Contains(name, "..") {
-		writeError(w, http.StatusBadRequest, "资源路径无效")
+		writeError(w, http.StatusBadRequest, "invalid resource path")
 		return
 	}
 	lower := strings.ToLower(name)
 	if strings.HasSuffix(lower, ".js") || strings.HasSuffix(lower, ".mjs") {
-		writeError(w, http.StatusForbidden, "不允许访问脚本资源")
+		writeError(w, http.StatusForbidden, "script resources are not allowed")
 		return
 	}
 
 	ar, err := epub.OpenArchive(s.bookPath(b))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "无法打开电子书")
+		writeError(w, http.StatusInternalServerError, "cannot open ebook")
 		return
 	}
 	defer ar.Close()
@@ -520,7 +520,7 @@ func (s *Server) chapter(w http.ResponseWriter, r *http.Request) {
 	}
 	idx, err := strconv.Atoi(r.PathValue("index"))
 	if err != nil || idx < 0 {
-		writeError(w, http.StatusBadRequest, "章节序号无效")
+		writeError(w, http.StatusBadRequest, "invalid chapter index")
 		return
 	}
 
@@ -529,11 +529,11 @@ func (s *Server) chapter(w http.ResponseWriter, r *http.Request) {
 	case "txt":
 		tb, err := s.parseTXT(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "TXT 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse TXT")
 			return
 		}
 		if idx >= len(tb.Chapters) {
-			writeError(w, http.StatusNotFound, "章节不存在")
+			writeError(w, http.StatusNotFound, "chapter not found")
 			return
 		}
 		ch := tb.Chapters[idx]
@@ -547,29 +547,29 @@ func (s *Server) chapter(w http.ResponseWriter, r *http.Request) {
 	case "cbz", "cbr":
 		pages, err := s.comicPages(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "漫画包解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse comic archive")
 			return
 		}
 		if idx >= len(pages) {
-			writeError(w, http.StatusNotFound, "页面不存在")
+			writeError(w, http.StatusNotFound, "page not found")
 			return
 		}
 		spread := r.URL.Query().Get("spread") == "1" && idx+1 < len(pages)
-		doc = renderComicChapter(b.ID, idx, "第 "+strconv.Itoa(idx+1)+" 页", spread)
+		doc = renderComicChapter(b.ID, idx, "Page "+strconv.Itoa(idx+1), spread)
 	case "pdf":
-		writeError(w, http.StatusBadRequest, "PDF 请使用内置 PDF 阅读器")
+		writeError(w, http.StatusBadRequest, "use the built-in PDF reader for PDF files")
 		return
 	case "audio":
-		writeError(w, http.StatusBadRequest, "有声书请使用音频播放器")
+		writeError(w, http.StatusBadRequest, "use the audio player for audiobooks")
 		return
 	case "fb2":
 		fb, err := s.parseFB2(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "FB2 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse FB2")
 			return
 		}
 		if idx >= len(fb.Chapters) {
-			writeError(w, http.StatusNotFound, "章节不存在")
+			writeError(w, http.StatusNotFound, "chapter not found")
 			return
 		}
 		ch := fb.Chapters[idx]
@@ -577,11 +577,11 @@ func (s *Server) chapter(w http.ResponseWriter, r *http.Request) {
 	case "mobi", "azw", "azw3", "prc":
 		_, chapters, err := s.parseKindle(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "MOBI/AZW3 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse MOBI/AZW3")
 			return
 		}
 		if idx >= len(chapters) {
-			writeError(w, http.StatusNotFound, "章节不存在")
+			writeError(w, http.StatusNotFound, "chapter not found")
 			return
 		}
 		ch := chapters[idx]
@@ -589,23 +589,23 @@ func (s *Server) chapter(w http.ResponseWriter, r *http.Request) {
 	default:
 		eb, err := s.parseEPUB(b)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "EPUB 解析失败")
+			writeError(w, http.StatusInternalServerError, "failed to parse EPUB")
 			return
 		}
 		if idx >= len(eb.Chapters) {
-			writeError(w, http.StatusNotFound, "章节不存在")
+			writeError(w, http.StatusNotFound, "chapter not found")
 			return
 		}
 		ch := eb.Chapters[idx]
 		ar, err := epub.OpenArchive(s.bookPath(b))
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "无法打开电子书")
+			writeError(w, http.StatusInternalServerError, "cannot open ebook")
 			return
 		}
 		defer ar.Close()
 		raw, err := ar.Read(ch.Href)
 		if err != nil {
-			writeError(w, http.StatusNotFound, "章节内容不存在")
+			writeError(w, http.StatusNotFound, "chapter content not found")
 			return
 		}
 		spine := make(map[string]int, len(eb.Chapters))
@@ -634,12 +634,12 @@ func (s *Server) saveProgress(w http.ResponseWriter, r *http.Request) {
 		ChapterPercent float64 `json:"chapterPercent"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	progress, err := s.store.SaveProgress(u.ID, b.ID, req.Chapter, req.ChapterPercent)
 	if err != nil {
-		writeError(w, errStatus(err), "保存进度失败")
+		writeError(w, errStatus(err), "failed to save reading progress")
 		return
 	}
 	writeJSON(w, http.StatusOK, progress)
@@ -651,7 +651,7 @@ func (s *Server) resetProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.ResetProgress(u.ID, b.ID); err != nil {
-		writeError(w, errStatus(err), "重置进度失败")
+		writeError(w, errStatus(err), "failed to reset reading progress")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -666,11 +666,11 @@ func (s *Server) addReading(w http.ResponseWriter, r *http.Request) {
 		Seconds int `json:"seconds"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if err := s.store.AddReading(u.ID, b.ID, req.Seconds); err != nil {
-		writeError(w, errStatus(err), "记录阅读时长失败")
+		writeError(w, errStatus(err), "failed to record reading time")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -688,7 +688,7 @@ func (s *Server) addBookmark(w http.ResponseWriter, r *http.Request) {
 		Snippet      string  `json:"snippet"`
 	}
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "请求体格式错误")
+		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	req.ChapterTitle = truncate(req.ChapterTitle, 80)
@@ -700,7 +700,7 @@ func (s *Server) addBookmark(w http.ResponseWriter, r *http.Request) {
 		Snippet:      req.Snippet,
 	})
 	if err != nil {
-		writeError(w, errStatus(err), "添加书签失败")
+		writeError(w, errStatus(err), "failed to add bookmark")
 		return
 	}
 	writeJSON(w, http.StatusCreated, bm)
@@ -712,7 +712,7 @@ func (s *Server) deleteBookmark(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.DeleteBookmark(u.ID, b.ID, r.PathValue("bookmarkID")); err != nil {
-		writeError(w, errStatus(err), "书签不存在")
+		writeError(w, errStatus(err), "bookmark not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
@@ -728,17 +728,17 @@ func (s *Server) loadBook(w http.ResponseWriter, r *http.Request) (*store.Book, 
 	id := r.PathValue("id")
 	b, err := s.store.GetBook(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "书籍不存在")
+		writeError(w, http.StatusNotFound, "book not found")
 		return nil, nil, false
 	}
 	u := currentUser(r)
 	if !s.canRead(u, b) {
-		writeError(w, http.StatusForbidden, "没有这本书的访问权限")
+		writeError(w, http.StatusForbidden, "no access to this book")
 		return nil, nil, false
 	}
 	b, err = s.ensureBookContent(r.Context(), b)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "加载书籍内容失败："+err.Error())
+		writeError(w, http.StatusBadGateway, "failed to load book content: "+err.Error())
 		return nil, nil, false
 	}
 	return b, u, true
@@ -826,7 +826,7 @@ func (s *Server) parseKindle(b *store.Book) (*kindle.Book, []kindle.Chapter, err
 		return nil, nil, err
 	}
 	if info.Size() > maxKindleBookBytes {
-		return nil, nil, fmt.Errorf("Kindle 文件超过 %d MB 上限", maxKindleBookBytes>>20)
+		return nil, nil, fmt.Errorf("Kindle file exceeds the %d MB limit", maxKindleBookBytes>>20)
 	}
 	s.mu.RLock()
 	cached, ok := s.kindleCache[b.ID]
@@ -840,7 +840,7 @@ func (s *Server) parseKindle(b *store.Book) (*kindle.Book, []kindle.Chapter, err
 	}
 	chapters := book.SplitChapters(b.ID)
 	if len(chapters) == 0 {
-		return nil, nil, errors.New("书中没有可阅读的正文")
+		return nil, nil, errors.New("this book has no readable body text")
 	}
 	s.mu.Lock()
 	if len(s.kindleCache) > 6 {

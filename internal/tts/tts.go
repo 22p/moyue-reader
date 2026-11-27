@@ -148,10 +148,10 @@ func (c Config) Normalize() Config {
 func ValidateURL(raw string) error {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
-		return errors.New("接口地址不是有效的 URL")
+		return errors.New("API URL is not valid")
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return errors.New("接口地址必须以 http:// 或 https:// 开头")
+		return errors.New("API URL must start with http:// or https://")
 	}
 	return nil
 }
@@ -187,13 +187,13 @@ func (c *Client) Synthesize(ctx context.Context, cfg Config, text, voice string)
 	cfg = cfg.Normalize()
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return nil, "", false, errors.New("朗读文本为空")
+		return nil, "", false, errors.New("no text to read aloud")
 	}
 	if utf8.RuneCountInString(text) > maxChunkRunes {
 		text = string([]rune(text)[:maxChunkRunes])
 	}
 	if cfg.APIKey == "" {
-		return nil, "", false, errors.New("未配置 API Key")
+		return nil, "", false, errors.New("API key is not configured")
 	}
 	voice = strings.TrimSpace(voice)
 	if voice == "" {
@@ -346,7 +346,7 @@ func (c *Client) fetch(ctx context.Context, cfg Config, text, voice string) ([]b
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("无法连接语音服务：%w", err)
+		return nil, "", fmt.Errorf("cannot connect to speech service: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -355,7 +355,7 @@ func (c *Client) fetch(ctx context.Context, cfg Config, text, voice string) ([]b
 		if msg == "" {
 			msg = resp.Status
 		}
-		return nil, "", fmt.Errorf("语音服务返回 %d：%s", resp.StatusCode, msg)
+		return nil, "", fmt.Errorf("speech service returned %d: %s", resp.StatusCode, msg)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -365,7 +365,7 @@ func (c *Client) fetch(ctx context.Context, cfg Config, text, voice string) ([]b
 			return nil, "", err
 		}
 		if len(data) == 0 {
-			return nil, "", errors.New("语音服务返回了空音频")
+			return nil, "", errors.New("speech service returned empty audio")
 		}
 		return data, "audio/mpeg", nil
 	}
@@ -383,7 +383,7 @@ func (c *Client) fetch(ctx context.Context, cfg Config, text, voice string) ([]b
 	}
 	dec := json.NewDecoder(io.LimitReader(resp.Body, maxAudioBytes))
 	if err := dec.Decode(&out); err != nil {
-		return nil, "", fmt.Errorf("无法解析语音服务响应：%w", err)
+		return nil, "", fmt.Errorf("cannot parse speech service response: %w", err)
 	}
 
 	encoded := out.Data
@@ -391,14 +391,14 @@ func (c *Client) fetch(ctx context.Context, cfg Config, text, voice string) ([]b
 		encoded = out.Choices[0].Message.Audio.Data
 	}
 	if encoded == "" {
-		return nil, "", errors.New("语音服务没有返回音频数据")
+		return nil, "", errors.New("speech service returned no audio data")
 	}
 	data, err := decodeBase64(encoded)
 	if err != nil {
-		return nil, "", fmt.Errorf("音频数据解码失败：%w", err)
+		return nil, "", fmt.Errorf("failed to decode audio data: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, "", errors.New("语音服务返回了空音频")
+		return nil, "", errors.New("speech service returned empty audio")
 	}
 	return data, "audio/mpeg", nil
 }

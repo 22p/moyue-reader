@@ -94,18 +94,17 @@ func TestMultiUserLibraryFlow(t *testing.T) {
 	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
+	adminUser := &store.User{Username: "admin", DisplayName: "Admin", IsAdmin: true}
+	if err := st.CreateUser(adminUser); err != nil {
+		t.Fatal(err)
+	}
 	admin := newTestClient(t, ts.URL)
 	user := newTestClient(t, ts.URL)
 
 	if code, _ := admin.do("GET", "/api/books", nil); code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized books = %d", code)
 	}
-	if code, _ := admin.do("POST", "/api/auth/setup", map[string]string{"username": "admin", "password": "admin123"}); code != http.StatusCreated {
-		t.Fatalf("setup = %d", code)
-	}
-	if code, _ := admin.do("POST", "/api/auth/setup", map[string]string{"username": "again", "password": "admin123"}); code != http.StatusConflict {
-		t.Fatalf("second setup = %d", code)
-	}
+	signInAs(t, admin, st, adminUser)
 
 	code, libResp := admin.do("POST", "/api/admin/libraries", map[string]string{
 		"name": "测试库", "path": libDir, "type": "txt",
@@ -134,17 +133,12 @@ func TestMultiUserLibraryFlow(t *testing.T) {
 		t.Errorf("book meta = %v", book)
 	}
 
-	code, userResp := admin.do("POST", "/api/admin/users", map[string]any{
-		"username": "reader", "password": "reader123", "libraries": []string{},
-	})
-	if code != http.StatusCreated {
-		t.Fatalf("create user = %d (%v)", code, userResp)
+	reader := &store.User{Username: "reader", DisplayName: "Reader"}
+	if err := st.CreateUser(reader); err != nil {
+		t.Fatal(err)
 	}
-	userID := userResp["user"].(map[string]any)["id"].(string)
-
-	if code, _ := user.do("POST", "/api/auth/login", map[string]string{"username": "reader", "password": "reader123"}); code != http.StatusOK {
-		t.Fatalf("login = %d", code)
-	}
+	userID := reader.ID
+	signInAs(t, user, st, reader)
 	_, list := user.do("GET", "/api/books", nil)
 	if got := len(list["books"].([]any)); got != 0 {
 		t.Errorf("user without library sees %d books", got)
@@ -223,9 +217,7 @@ func TestMultiUserLibraryFlow(t *testing.T) {
 
 	// 设备会话：另一个客户端登录后应能看到两个会话，并可撤销其它设备
 	other := newTestClient(t, ts.URL)
-	if code, _ := other.do("POST", "/api/auth/login", map[string]string{"username": "reader", "password": "reader123"}); code != http.StatusOK {
-		t.Fatalf("second login = %d", code)
-	}
+	signInAs(t, other, st, reader)
 	_, sessions := user.do("GET", "/api/auth/sessions", nil)
 	if list, _ := sessions["sessions"].([]any); len(list) != 2 {
 		t.Errorf("sessions = %d, want 2", len(list))
@@ -257,13 +249,6 @@ func TestMultiUserLibraryFlow(t *testing.T) {
 		t.Errorf("same-origin POST = %d, want 201", got)
 	}
 
-	// 管理员重置密码后，目标用户的旧会话必须全部失效。
-	if code, _ := admin.do("PATCH", "/api/admin/users/"+userID, map[string]any{"password": "newpass123"}); code != http.StatusOK {
-		t.Fatalf("admin password reset = %d", code)
-	}
-	if code, _ := user.do("GET", "/api/books", nil); code != http.StatusUnauthorized {
-		t.Errorf("old session after admin reset = %d, want 401", code)
-	}
 }
 
 func TestPWARoutes(t *testing.T) {

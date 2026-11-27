@@ -32,7 +32,7 @@ func (s *Server) lockWebDAVBook(ctx context.Context, id string) (func(), error) 
 // 本地书库直接返回原记录。
 func (s *Server) ensureBookContent(ctx context.Context, b *store.Book) (*store.Book, error) {
 	if b == nil {
-		return nil, fmt.Errorf("书籍不存在")
+		return nil, fmt.Errorf("book not found")
 	}
 	lib, err := s.store.GetLibrary(b.LibraryID)
 	if err != nil {
@@ -55,7 +55,7 @@ func (s *Server) ensureBookContent(ctx context.Context, b *store.Book) (*store.B
 
 	local := filepath.Join(lib.Path, filepath.FromSlash(b.File))
 	if !pathInside(lib.Path, local) {
-		return nil, fmt.Errorf("书籍路径超出缓存目录")
+		return nil, fmt.Errorf("book path escapes the cache directory")
 	}
 	info, statErr := os.Stat(local)
 	needDownload := statErr != nil
@@ -67,7 +67,7 @@ func (s *Server) ensureBookContent(ctx context.Context, b *store.Book) (*store.B
 		return b, nil
 	}
 	if b.Size > maxRemoteBookBytes {
-		return nil, fmt.Errorf("WebDAV 文件超过 %d MB 上限", maxRemoteBookBytes>>20)
+		return nil, fmt.Errorf("WebDAV file exceeds the %d MB limit", maxRemoteBookBytes>>20)
 	}
 
 	if needDownload {
@@ -90,7 +90,7 @@ func (s *Server) ensureBookContent(ctx context.Context, b *store.Book) (*store.B
 		}
 		if info.Size() > maxRemoteBookBytes {
 			_ = os.Remove(local)
-			return nil, fmt.Errorf("WebDAV 文件超过 %d MB 上限", maxRemoteBookBytes>>20)
+			return nil, fmt.Errorf("WebDAV file exceeds the %d MB limit", maxRemoteBookBytes>>20)
 		}
 	}
 

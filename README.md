@@ -1,6 +1,6 @@
 # 墨阅 · Moyue Library
 
-**书库与阅读器**：管理员维护书库目录与账号，每位读者拥有独立的书架、阅读进度、书签和阅读统计。
+**书库与阅读器**：管理员维护书库目录与访问权限，每位读者拥有独立的书架、阅读进度、书签和阅读统计。
 
 支持 **EPUB / TXT / PDF / CBZ / CBR / FB2 / MOBI / AZW3 / 有声书**，内置单页 / 双页 / 滚动三种翻页方式与 **小米 MiMo 语音朗读**。后端 Go 1.27，前端原生 HTML / CSS / JS（无 npm 构建、无 CDN），一个二进制即可部署，界面支持中文、英文、日文与韩文。
 
@@ -9,11 +9,11 @@
 ## 功能
 
 **账号与权限**
-- 首次启动创建管理员，之后由管理员创建账号，不开放公开注册
-- 角色区分（管理员 / 普通用户），可访问的书库按账号分配
+- 使用 OpenID Connect 统一身份登录，本地不保存密码，不开放公开注册
+- 用户首次登录时自动建号；管理员由 `-oidc-admins` 白名单（OIDC subject）指定
+- 角色区分（管理员 / 普通用户），「默认书库」对全部登录用户开放，其它书库按账号分配
 - 每个账号独立的阅读进度、书签、阅读时长与连续天数
-- PBKDF2-SHA256 密码哈希、HttpOnly 会话 Cookie、30 天会话（重启不掉线）
-- 登录失败限流；修改密码会注销其它设备
+- HttpOnly 会话 Cookie、30 天会话（重启不掉线）
 - 登录设备管理：查看设备 / IP / 最后活跃时间，可单独撤销或一键退出其它设备
 
 **书库管理（类 Jellyfin）**
@@ -102,7 +102,7 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/moyue .
 ./bin/moyue -addr :8080 -books ./books -data ./data
 ```
 
-首次打开会要求创建管理员账号。`books/` 内附带八本演示书：两本 EPUB、一本 TXT、一本 PDF、一本 CBZ、一本 FB2、一本 AZW3、一段音频，会自动扫描进「默认书库」。
+启动时需通过 `-oidc-discovery` 等参数配置统一身份登录（见下文）。`books/` 内附带八本演示书：两本 EPUB、一本 TXT、一本 PDF、一本 CBZ、一本 FB2、一本 AZW3、一段音频，会自动扫描进「默认书库」。
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -111,12 +111,49 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/moyue .
 | `-data` | `data` | 数据目录（SQLite 数据库：账号、会话、进度、书签） |
 | `-debug` | `false` | 调试日志 |
 | `-trust-proxy` | `false` | 部署在受信任反向代理后，读取 `X-Forwarded-Proto/For/Host`（用于 Secure Cookie、真实 IP 与限流） |
+| `-oidc-discovery` | 空 | OIDC 发现文档地址，例如 `https://id.example.com/.well-known/openid-configuration` |
+| `-oidc-client-id` | 空 | OIDC client id |
+| `-oidc-client-secret` | 空 | OIDC client secret（使用 PKCE 的公共客户端可留空） |
+| `-oidc-admins` | 空 | 管理员白名单，只填 OIDC `sub`，逗号分隔 |
+| `-oidc-scopes` | `openid profile email` | 请求的授权范围 |
+
+以上 OIDC 参数均可通过 `MOYUE_` 前缀的环境变量提供，命令行参数优先：
+
+| 参数 | 环境变量 |
+| --- | --- |
+| `-oidc-discovery` | `MOYUE_OIDC_DISCOVERY` |
+| `-oidc-client-id` | `MOYUE_OIDC_CLIENT_ID` |
+| `-oidc-client-secret` | `MOYUE_OIDC_CLIENT_SECRET` |
+| `-oidc-admins` | `MOYUE_OIDC_ADMINS` |
+| `-oidc-scopes` | `MOYUE_OIDC_SCOPES` |
+
+### 统一身份登录（OIDC）
+
+墨阅只保留 OIDC 登录，不再提供本地用户名密码。启动示例：
+
+```bash
+./bin/moyue \
+  -addr :8080 \
+  -oidc-discovery https://id.example.com/.well-known/openid-configuration \
+  -oidc-client-id moyue \
+  -oidc-client-secret 'your-client-secret' \
+  -oidc-admins '248289761001'
+```
+
+- 已配置 OIDC 时访问站点会先用 `prompt=none` 静默检查身份提供商会话：已有会话直接进入书架，未登录才展示本地「登录书库」页
+- 登录回调地址自动使用 `https://你的域名/api/auth/oidc/callback`，无需额外参数
+- 注销回调地址自动使用 `https://你的域名/api/auth/oidc/logout/callback`；身份提供商支持 RP 主动注销时，退出登录会先跳转到提供商的注销页，再回到这里
+- 身份提供商需允许 `openid profile email` 范围，并登记上述两个回调地址
+- `-oidc-admins` 只匹配 ID Token 的 `sub`（区分大小写）；白名单为空时所有用户都是普通用户
+- 用户首次登录时按 `preferred_username` / 邮箱本地部分自动生成唯一用户名；显示名称与邮箱仅用于展示
+- 管理员标记每次登录都会按白名单重新同步；「默认书库」每次登录都会补齐，其它书库权限由管理员在控制台分配，登录不会覆盖
+- 回调地址按请求的协议与 `Host` 推导；使用反向代理时请加 `-trust-proxy`，确保 HTTPS 与域名正确
 
 ## 使用流程
 
-1. **创建管理员**：首次访问填写用户名与密码（至少 6 位）。
+1. **配置 OIDC**：在身份提供商创建客户端，登记 `https://你的域名/api/auth/oidc/callback` 与 `https://你的域名/api/auth/oidc/logout/callback`，然后用 `-oidc-discovery`、`-oidc-client-id` 等参数启动墨阅。
 2. **添加书库**：头像菜单 → 管理控制台 → 书库 → 选择「本地目录」填写服务器路径（例如 `/srv/comics`），或选择「WebDAV」填写指向书库文件夹的地址与账号密码，创建后立即扫描。
-3. **创建账号**：管理控制台 → 用户 → 填写账号密码，勾选可访问的书库；管理员默认拥有全部书库。
+3. **分配权限**：用户首次登录后会自动出现在「管理控制台 → 用户」，勾选可访问的书库；「默认书库」已对所有登录用户开放，白名单中的管理员默认拥有全部书库。
 4. **开始阅读**：书架点击封面，进度会自动保存；目录、书签、划线笔记、主题与字号都在阅读器内调整。
 
 > 本地书库路径是**服务器上的路径**，不是浏览器本机路径。Docker 部署时需要先把宿主目录挂载进容器。WebDAV 书库只需要容器能访问该地址。
@@ -181,7 +218,8 @@ books/*.mobi|*.azw3|*.mp3
 
 - 数据库使用 WAL 模式（运行时会出现 `moyue.db-wal` / `moyue.db-shm`，正常关闭后自动合并）
 - 数据库结构带版本号，启动时自动升级；新增字段或表不会丢失已有数据
-- 密码使用 PBKDF2-SHA256（210,000 次迭代、随机盐）存储，会话只保存 token 的 SHA-256
+- 从本地账号版本升级时，旧账号会被取消管理员权限且旧会话全部失效，需要改用 OIDC 重新登录
+- 登录由 OIDC 完成，本地不保存密码；会话只保存随机 token 的 SHA-256
 - `data/tts/` 是可再生的朗读缓存，可随时删除；删除后首次朗读会重新合成
 - `data/webdav/` 只保存已经打开过的 WebDAV 书籍，可随时删除；下次打开会重新下载
 - WebDAV 地址、用户名与密码保存在 SQLite；密码当前为明文，请限制 `data/` 目录权限
@@ -200,10 +238,11 @@ books/*.mobi|*.azw3|*.mp3
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/auth/state` | 是否已完成初始化、当前登录用户 |
-| `POST` | `/api/auth/setup` | 首次创建管理员（仅在无账号时可用） |
-| `POST` | `/api/auth/login` / `logout` | 登录 / 退出 |
-| `POST` | `/api/auth/password` | 修改自己的密码 |
+| `GET` | `/api/auth/state` | 是否已配置 OIDC、当前登录用户 |
+| `GET` | `/api/auth/oidc/start` | 跳转到身份提供商开始登录 |
+| `GET` | `/api/auth/oidc/callback` | OIDC 登录回调，校验后创建会话 |
+| `GET` | `/api/auth/oidc/logout/callback` | OIDC 注销回调，清理会话后回到登录页 |
+| `POST` | `/api/auth/logout` | 退出登录；支持 RP 主动注销时返回 `redirectUrl` |
 | `GET` | `/api/auth/sessions` | 当前账号的登录设备列表 |
 | `DELETE` | `/api/auth/sessions/{id}` | 撤销指定设备（当前设备会退出） |
 | `POST` | `/api/auth/sessions/revoke-others` | 退出其它设备 |
@@ -236,8 +275,8 @@ books/*.mobi|*.azw3|*.mp3
 | `GET` / `POST` | `/api/admin/libraries` | 书库列表 / 新建 |
 | `DELETE` | `/api/admin/libraries/{id}` | 删除书库记录（本地文件保留；WebDAV 缓存会删除） |
 | `POST` | `/api/admin/libraries/{id}/scan` | 触发扫描 |
-| `GET` / `POST` | `/api/admin/users` | 账号列表 / 新建 |
-| `PATCH` / `DELETE` | `/api/admin/users/{id}` | 修改权限 / 删除账号 |
+| `GET` | `/api/admin/users` | 账号列表（登录时自动创建） |
+| `PATCH` / `DELETE` | `/api/admin/users/{id}` | 修改书库权限 / 删除账号 |
 | `GET` / `PUT` | `/api/admin/settings/tts` | 读取 / 保存语音朗读配置（密钥只返回掩码） |
 | `POST` | `/api/admin/settings/tts/test` | 用当前表单配置合成一句测试语音 |
 
@@ -251,7 +290,8 @@ books/*.mobi|*.azw3|*.mp3
 ├── AGENTS.md            # 开发约定、实现要点与 Agent 提示
 ├── main.go
 ├── internal/
-│   ├── auth/            # PBKDF2、会话 token、用户名/密码规则
+│   ├── auth/            # 会话 token 生成与摘要
+│   ├── oidc/            # OIDC 发现、JWT 校验、授权码 + PKCE
 │   ├── epub/            # EPUB 2/3 解析与资源读取
 │   ├── txt/             # 编码识别、元数据、自动分章、HTML 渲染
 │   ├── comic/           # CBZ（zip）与 CBR（rar）页面枚举与读取
@@ -282,7 +322,7 @@ books/*.mobi|*.azw3|*.mp3
 go test ./...
 ```
 
-覆盖 EPUB / TXT / CBZ / FB2 / MOBI 解析、密码哈希与会话、按账号隔离的进度 / 书签 / 批注 / 统计、设备会话撤销、SQLite 持久化与结构迁移、账号权限流程、全文搜索、CSRF Origin 校验、HTML 清洗与路径穿越防护、语音配置读写与 MiMo / OpenAI 接口解析、WebDAV 目录枚举与按需下载。浏览器端覆盖中/英/日/韩界面、移动端划线工具条、上传进度对话框、多种宽度下的单页 / 双页排版与朗读高亮。
+覆盖 EPUB / TXT / CBZ / FB2 / MOBI 解析、OIDC 回调与会话、按账号隔离的进度 / 书签 / 批注 / 统计、设备会话撤销、SQLite 持久化与结构迁移、账号权限流程、全文搜索、CSRF Origin 校验、HTML 清洗与路径穿越防护、语音配置读写与 MiMo / OpenAI 接口解析、WebDAV 目录枚举与按需下载。浏览器端覆盖中/英/日/韩界面、移动端划线工具条、上传进度对话框、多种宽度下的单页 / 双页排版与朗读高亮。
 
 开发约定、实现要点与 Agent 维护提示见 **[AGENTS.md](AGENTS.md)**。
 
@@ -294,6 +334,10 @@ docker run -d --name moyue -p 8080:8080 \
   -v "$PWD/data:/app/data" \
   -v "$PWD/books:/app/books" \
   -v /srv/comics:/media/comics:ro \
+  -e MOYUE_OIDC_DISCOVERY=https://id.example.com/.well-known/openid-configuration \
+  -e MOYUE_OIDC_CLIENT_ID=moyue \
+  -e MOYUE_OIDC_CLIENT_SECRET=your-client-secret \
+  -e MOYUE_OIDC_ADMINS=248289761001 \
   moyue
 ```
 
@@ -336,13 +380,13 @@ GHCR 使用内置的 `GITHUB_TOKEN`，无需额外配置；首次推送后可在
 - 漫画图片按屏幕等比缩放，超长条漫（webtoon）会偏小
 - MOBI/AZW3 保留正文与主要图片，复杂 CSS、SVG flow 图片与部分脚注可能丢失
 - 有声书按单个音频文件成书，不支持章节标记、多文件合辑与内嵌封面
-- 四语界面覆盖主要界面与常见提示，书籍内容、书库名与部分服务端错误信息保持原文
+- 四语界面覆盖主要界面与常见提示；服务端统一返回英文错误文案，常见错误由前端按当前语言显示，少量边缘错误可能仍为英文
 - 语音朗读按 300–400 字分块请求，首次朗读每块有网络合成延迟；无网络时无法朗读，已缓存的块仍可播放
 - 块内逐句高亮按音频时长与字数比例估算，语速或停顿变化时可能有一句以内的偏差
 - 朗读仅支持文字书；PDF / 漫画 / 有声书没有朗读入口
 - 语音设置中的 API Key 以明文保存在 SQLite，部署时请限制 `data/` 目录权限
 - 权限按「书库」分配，不支持单本书级别的访问控制
-- 没有 OAuth / LDAP / 公开注册，账号由管理员创建
+- 不提供本地账号或公开注册；登录依赖 OIDC，服务器需能访问发现文档与 JWKS
 - 从磁盘删除的文件会在下一次非空扫描中清理；如果整个扫描为空会保留记录，超大书库可手动触发扫描
 - WebDAV 书库只缓存已打开书籍的正文；未打开的书在书架上只显示文件名、大小与类型，首次打开会有下载等待
 - WebDAV 当前使用 Basic Auth，密码以明文保存在 SQLite；建议使用专用只读账号并启用 HTTPS

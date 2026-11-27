@@ -397,7 +397,7 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "SAMEORIGIN")
 		if !strings.HasPrefix(r.URL.Path, "/api/books/") || !strings.Contains(r.URL.Path, "/chapter/") {
 			h.Set("Content-Security-Policy",
-				"default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "+
+				"default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; "+
 					"script-src 'self'; font-src 'self' data:; connect-src 'self'; media-src 'self' blob:; "+
 					"frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'")
 		}

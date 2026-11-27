@@ -18,6 +18,7 @@ type userView struct {
 	Libraries   []string  `json:"libraries"`
 	Subject     string    `json:"subject,omitempty"`
 	Email       string    `json:"email,omitempty"`
+	AvatarURL   string    `json:"avatarUrl,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
 }
 
@@ -34,6 +35,7 @@ func viewUser(u *store.User) userView {
 		Libraries:   append([]string{}, libs...),
 		Subject:     u.OIDCSubject,
 		Email:       u.Email,
+		AvatarURL:   u.AvatarURL,
 		CreatedAt:   u.CreatedAt,
 	}
 }

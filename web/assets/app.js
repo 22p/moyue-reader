@@ -211,6 +211,7 @@
     adminBack: $('#adminBack'),
     adminWho: $('#adminWho'),
     adminAvatar: $('#adminAvatar'),
+    adminAvatarText: $('#adminAvatarText'),
     adminLibsSection: $('#adminLibsSection'),
     adminUsersSection: $('#adminUsersSection'),
     libForm: $('#libForm'),
@@ -426,17 +427,40 @@
 
   /* ============================ 认证 ============================ */
 
+  // 优先显示 OIDC 的 picture，加载失败或缺失时退回名字首字。
+  function applyAvatar(host, textEl, user) {
+    const initial = (user.displayName || user.username || '墨').trim().slice(0, 1).toUpperCase();
+    textEl.textContent = initial;
+    textEl.hidden = false;
+    const old = host.querySelector('img.avatar-img');
+    if (old) old.remove();
+    const url = (user.avatarUrl || '').trim();
+    if (!url) return;
+    const img = document.createElement('img');
+    img.className = 'avatar-img';
+    img.alt = '';
+    img.decoding = 'async';
+    img.referrerPolicy = 'no-referrer';
+    img.hidden = true;
+    img.addEventListener('load', () => {
+      textEl.hidden = true;
+      img.hidden = false;
+    });
+    img.addEventListener('error', () => img.remove());
+    img.src = url;
+    host.appendChild(img);
+  }
+
   function setUser(user) {
     state.user = user;
     if (!user) return;
-    const initial = (user.displayName || user.username || '墨').trim().slice(0, 1).toUpperCase();
-    el.avatarText.textContent = initial;
+    applyAvatar(el.avatarBtn, el.avatarText, user);
     el.avatarBtn.title = user.displayName || user.username;
     el.userName.textContent = user.displayName || user.username;
     el.userAccount.textContent = '@' + user.username;
     el.adminEntry.hidden = !user.isAdmin;
     el.adminWho.textContent = user.displayName || user.username;
-    el.adminAvatar.textContent = initial;
+    applyAvatar(el.adminAvatar, el.adminAvatarText, user);
     el.uploadBtn.hidden = !user.isAdmin;
     el.emptyUpload.hidden = !user.isAdmin;
     el.emptyHint.hidden = !user.isAdmin;

@@ -129,6 +129,7 @@ func newMockIDP(t *testing.T) *mockIDP {
 			"email":          email,
 			"email_verified": true,
 			"name":           name,
+			"picture":        "https://cdn.example.com/avatar.png",
 		})
 		obj, err := signer.Sign(payload)
 		if err != nil {
@@ -245,6 +246,8 @@ func TestOIDCLoginFlow(t *testing.T) {
 	}
 	if user, _ := me["user"].(map[string]any); user == nil || user["isAdmin"] != true {
 		t.Fatalf("admin login = %v", me)
+	} else if user["avatarUrl"] != "https://cdn.example.com/avatar.png" {
+		t.Fatalf("avatar url = %v", user["avatarUrl"])
 	}
 	users := st.ListUsers()
 	if len(users) != 1 || users[0].OIDCSubject != "admin-sub" || !users[0].IsAdmin {

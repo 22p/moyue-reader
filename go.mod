@@ -4,7 +4,7 @@ go 1.27.2
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
-	github.com/go-jose/go-jose/v4 v4.1.3
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/nwaples/rardecode/v2 v2.4.5
 	github.com/pdfcpu/pdfcpu v0.16.3
 	golang.org/x/net v0.61.0

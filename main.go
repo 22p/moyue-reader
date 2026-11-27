@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -104,6 +105,29 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// 低频维护：清理过期会话与过旧的每日统计，空间碎片较多时回收数据库文件。
+	var background sync.WaitGroup
+	background.Add(1)
+	go func() {
+		defer background.Done()
+		run := func() {
+			if err := st.Maintain(); err != nil {
+				slog.Warn("database maintenance failed", "err", err)
+			}
+		}
+		run()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				run()
+			}
+		}
+	}()
+
 	displayURL := "http://localhost" + *addr
 	if !strings.HasPrefix(*addr, ":") {
 		displayURL = "http://" + *addr
@@ -124,6 +148,7 @@ func main() {
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown timed out", "err", err)
 	}
+	background.Wait()
 	if err := st.Close(); err != nil {
 		slog.Error("failed to close database", "err", err)
 	}

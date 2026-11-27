@@ -173,9 +173,13 @@ CREATE INDEX IF NOT EXISTS idx_books_checksum ON books(library_id, checksum);
 
 CREATE TABLE IF NOT EXISTS sessions (
     key        TEXT PRIMARY KEY,
+    id         TEXT NOT NULL DEFAULT '',
     user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_agent TEXT NOT NULL DEFAULT '',
+    ip         TEXT NOT NULL DEFAULT '',
     id_token   TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
+    last_seen  INTEGER NOT NULL DEFAULT 0,
     expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
@@ -1453,7 +1457,7 @@ FROM progress WHERE user_id = ?`, userID).Scan(&st.TotalSeconds, &finished)
 	if st.TodaySeconds == 0 {
 		start = start.AddDate(0, 0, -1)
 	}
-	first := start.AddDate(0, 0, -3650).Format("2006-01-02")
+	first := start.AddDate(0, 0, -dailyRetentionDays).Format("2006-01-02")
 	rows, err := s.db.Query(`SELECT day FROM daily WHERE user_id = ? AND day >= ? AND day <= ? AND seconds > 0
 ORDER BY day DESC`, userID, first, start.Format("2006-01-02"))
 	if err == nil {
